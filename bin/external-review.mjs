@@ -8,9 +8,11 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync, readFileSync, writeFileSync, readdirSync, statSync,
+  mkdirSync, copyFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const OR = 'https://openrouter.ai/api/v1';
 
@@ -501,12 +503,51 @@ function cmdRun(args) {
   });
 }
 
+
+// ----------------------------------------------------------- install-skill
+
+/* Copy the skill to where the assistant looks for it.
+ *
+ * A command rather than a documented `cp`, because the path depends on how the
+ * package was installed: a GLOBAL install puts it under the npm root, a local
+ * one under ./node_modules, and running from a clone puts it next to this file.
+ * The README shipped the local path beside the global install instruction,
+ * which is a paper cut on the very first thing a new user does.
+ */
+function cmdInstallSkill(args) {
+  const global = args.includes('--global');
+  const dest = join(global ? homedir() : process.cwd(),
+    '.claude', 'skills', 'external-review');
+
+  // Resolve relative to THIS file, so it works from a global install, a local
+  // one, or a git clone without knowing which.
+  const src = join(dirname(fileURLToPath(import.meta.url)),
+    '..', 'skills', 'external-review');
+  if (!existsSync(join(src, 'SKILL.md'))) {
+    die(`cannot find the skill next to the CLI (looked in ${src})`);
+  }
+
+  if (existsSync(join(dest, 'SKILL.md')) && !args.includes('--force')) {
+    die(`${dest} already exists. Pass --force to overwrite it.`);
+  }
+
+  mkdirSync(dest, { recursive: true });
+  copyFileSync(join(src, 'SKILL.md'), join(dest, 'SKILL.md'));
+
+  console.log(C.g(`\n  installed → ${dest}`));
+  console.log(C.dim(
+    `\n  ${global ? 'Available in every project.' : 'Available in this project.'}` +
+    `${global ? '' : ' Use --global for every project.'}\n` +
+    '  Now ask your assistant to "review this with a second model".\n'));
+}
+
 // -------------------------------------------------------------------- help
 
 const HELP = `
 ${C.b('external-review')} — run a code review with a second, independent model.
 
 ${C.b('Commands')}
+  install-skill [--global]   put the skill where your assistant will find it
   doctor                     check your setup and say what is missing
   quota                      spend so far, credit limit, and the free-tier cap
   models [--free] [--all]    candidate models, ranked by context window
@@ -534,6 +575,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 const run = {
   doctor: cmdDoctor, quota: cmdQuota, models: cmdModels,
   providers: cmdProviders, scan: cmdScan, sync: cmdSync, run: cmdRun,
+  'install-skill': cmdInstallSkill,
 }[cmd];
 
 if (!run) { console.log(HELP); process.exit(cmd ? 1 : 0); }

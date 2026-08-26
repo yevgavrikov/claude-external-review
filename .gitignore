@@ -2,3 +2,4 @@ node_modules/
 *.log
 findings*.md
 .DS_Store
+external-review-*.tgz

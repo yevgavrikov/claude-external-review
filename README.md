@@ -52,20 +52,17 @@ npx external-review doctor
 
 ### The skill
 
-Copy it where your assistant looks for skills:
-
 ```bash
-# just this project
-mkdir -p .claude/skills
-cp -r node_modules/external-review/skills/external-review .claude/skills/
-
-# or every project
-mkdir -p ~/.claude/skills
-cp -r node_modules/external-review/skills/external-review ~/.claude/skills/
+external-review install-skill            # this project
+external-review install-skill --global   # every project
 ```
 
 Then ask your assistant to *"review this with a second model"* and it will pick
 the skill up.
+
+(It is a command rather than a `cp` because the source path differs between a
+global install, a local one and a git clone. It refuses to overwrite an existing
+skill unless you pass `--force`.)
 
 ### A model provider
 
@@ -283,6 +280,7 @@ codebases.
 
 | | |
 |---|---|
+| `install-skill [--global]` | put the skill where your assistant will find it |
 | `doctor` | check the setup, say what is missing |
 | `quota` | spend so far, credit limit, free-tier cap |
 | `models [--free] [--all] [--min-context N] [--limit N]` | candidates by context window |

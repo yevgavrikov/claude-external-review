@@ -173,3 +173,29 @@ test('sync refuses when the scan finds something', () => {
   const out = run(['sync', '--from', dir, '--to', 'nobody@nowhere:/tmp/x']);
   assert.match(out, /refusing to sync/);
 });
+
+// --- install-skill ---------------------------------------------------------
+// A command rather than a documented `cp`, because the source path differs
+// between a global install, a local one and a git clone - and the README
+// originally printed the LOCAL path beside the GLOBAL install instruction,
+// which fails on the very first thing a new user does.
+
+test('install-skill places the skill and refuses to clobber it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-skill-'));
+  const first = execFileSync('node', [BIN, 'install-skill'],
+    { encoding: 'utf8', cwd: dir, env: { ...process.env, NO_COLOR: '1' } });
+  assert.match(first, /installed →/);
+  assert.ok(readFileSync(join(dir, '.claude/skills/external-review/SKILL.md'), 'utf8')
+    .includes('external-review'));
+
+  let blocked = '';
+  try {
+    execFileSync('node', [BIN, 'install-skill'], { cwd: dir, stdio: 'pipe' });
+  } catch (e) { blocked = `${e.stdout ?? ''}${e.stderr ?? ''}`; }
+  assert.match(blocked, /already exists/,
+    'a second run must not silently overwrite a customised skill');
+});
+
+test('help lists install-skill, since it is the first thing anyone runs', () => {
+  assert.match(run([]), /install-skill/);
+});
