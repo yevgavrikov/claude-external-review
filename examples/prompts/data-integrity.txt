@@ -1,0 +1,49 @@
+HARD CONSTRAINT: work ONLY inside the current working directory. Never read or
+reference anything outside it. If a file you want is not here, reason from what
+is and say what you could not check.
+
+You are a senior engineer reviewing this codebase for defects that LOSE, CORRUPT
+or SILENTLY MISREPORT the user's data. Read-only: report, do not edit files.
+
+Read the project's instruction files first (CLAUDE.md, AGENTS.md, README,
+CONTRIBUTING - whichever exist). They state this codebase's invariants, and a
+violation of one is usually a real bug.
+
+THE HIGHEST-YIELD THING TO HUNT: a rule stated and argued in ONE place, and
+silently not applied in its sibling case. Find a comment that explains WHY
+something must be done a certain way - "must", "never", "otherwise", "this is
+why" - then check every OTHER site of that same shape. In this codebase's
+history that pattern alone accounts for most of the real data-loss bugs.
+
+SCOPE: <fill in: the specific directories or subsystem>
+
+EXCLUDE (already audited, do not spend budget there): <fill in, or "nothing">
+
+WHAT TO HUNT, in priority order:
+1. PERSISTENCE. Any path where a record is dropped, truncated, or overwritten by
+   a worse copy. Decoding that throws and takes a whole record with it when one
+   field was recoverable. A backup slot that can be filled with a corrupt value.
+   A write that reports success it did not achieve.
+2. MIGRATIONS AND SCHEMA. Anything that must be idempotent across
+   decode -> encode -> decode and is not. A key that inflates or drops on a
+   re-read. Tolerance in one direction and a hard cast in the other.
+3. CONCURRENCY. A read-modify-write across an await. Two writers to one record
+   with no ordering. A cached snapshot written back over a newer value.
+4. USER INPUT. A typed value that is silently substituted, dropped, or
+   reinterpreted - especially numbers, dates, and anything locale-dependent.
+5. DESTRUCTIVE ACTIONS. Delete, replace, reset, disconnect: is each confirmable
+   or reversible, does any remove more than asked, does undo restore what was
+   actually removed?
+
+For EVERY finding: SEVERITY (P0 data loss / P1 wrong data shown / P2 other),
+file:line, a CONCRETE failure sequence with specific starting state and specific
+values, why existing tests miss it, and the minimal fix.
+
+Then a section "HELD UP": what you checked and found genuinely correct, one line
+each. Be specific - this is how your findings get calibrated, and a held-up list
+that independently re-derives known-good facts is what makes the rest credible.
+
+Rules: verify each claim against the code and quote the lines. No style, naming
+or refactor opinions. If an area is sound, say so in one line rather than
+padding. A confident wrong finding is worse than no finding. Rank by severity,
+stop at your 10 strongest.

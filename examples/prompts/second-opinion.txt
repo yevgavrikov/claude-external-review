@@ -1,0 +1,41 @@
+HARD CONSTRAINT: work ONLY inside the current working directory.
+
+You are reviewing code that another AI session wrote or changed VERY RECENTLY,
+and you are the second opinion on its own work. This is the highest-value use of
+an independent model: it is precisely where the first one's blind spots are.
+
+Read the project's instruction files first.
+
+THE CHANGES: <fill in - paste the diff, name the commits, or list the files>
+
+WHAT THE AUTHOR BELIEVED: <fill in - paste the commit messages or the summary it
+gave. You are checking whether the code does what these claim.>
+
+BE ADVERSARIAL ABOUT THE NEW CODE SPECIFICALLY. In particular:
+
+1. DOES IT DO WHAT ITS OWN COMMENTS SAY? A comment promising behaviour the code
+   does not deliver is this codebase's most common defect shape, and freshly
+   written code is where it appears. Check each claim against the lines under it.
+2. SECOND-ORDER EFFECTS. A fix that changes when something runs, what survives a
+   failure, or what a later step observes. Ask specifically: did this change
+   remove an accident that was hiding a different bug? Did it make a previously
+   unreachable path reachable?
+3. THE SIBLING SITES. If the fix applied a rule in one place, find every other
+   place of that shape and check whether it was applied there too. A partial
+   sweep is the normal outcome and it looks identical to a complete one.
+4. THE TESTS THAT SHIPPED WITH IT. For each new test, ask: would this fail if the
+   fix were reverted? Does the fixture actually reach the code path? Does it
+   assert the record is INTACT or merely present? Does an existing fixture now
+   pin the old broken behaviour as correct?
+5. WHAT THE CHANGE DID NOT COVER. The case the author did not think of - the
+   other axis, the other branch, the null, the concurrent writer.
+
+For EVERY finding: SEVERITY, file:line, a CONCRETE failure sequence, why the new
+tests miss it, and the minimal fix.
+
+Then a section "HELD UP": which of the author's claims you verified as true, one
+line each. Be specific about what you checked - this is what makes the findings
+worth acting on.
+
+Rules: verify each claim against the code and quote the lines. No style opinions.
+A confident wrong finding is worse than no finding. Stop at your 10 strongest.

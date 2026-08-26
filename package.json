@@ -1,0 +1,44 @@
+{
+  "name": "external-review",
+  "version": "1.0.0",
+  "description": "Review your code with a second, independent model - and know what it costs, where your source goes, and which findings to believe. Ships a Claude Code skill.",
+  "type": "module",
+  "bin": {
+    "external-review": "bin/external-review.mjs"
+  },
+  "files": [
+    "bin",
+    "skills",
+    "docs",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "code-review",
+    "ai",
+    "claude",
+    "claude-code",
+    "skill",
+    "openrouter",
+    "llm",
+    "static-analysis",
+    "second-opinion",
+    "privacy"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yevgavrikov/claude-external-review.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yevgavrikov/claude-external-review/issues"
+  },
+  "homepage": "https://github.com/yevgavrikov/claude-external-review#readme",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\""
+  }
+}

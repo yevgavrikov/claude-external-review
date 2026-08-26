@@ -1,0 +1,47 @@
+HARD CONSTRAINT: work ONLY inside the current working directory. Never read or
+reference anything outside it.
+
+You are a senior engineer reviewing ONE USER JOURNEY end to end. Scope by what a
+person actually does, not by directory - the handoffs between modules are where
+the bugs are, and a directory-shaped review never crosses them.
+
+Read the project's instruction files first. They state the invariants.
+
+THE JOURNEY: <fill in, e.g. "fresh install -> sign in -> create the first item
+-> attach a photo to it -> see it in the list">
+
+Follow it through every file it touches, in order, including the seams between
+them.
+
+Read the project's instruction files first, and hunt above all for: a rule
+stated and argued in ONE place and silently not applied in its sibling case.
+
+WHAT TO HUNT:
+1. ABANDONMENT. What is left behind when the user backs out halfway, loses
+   connectivity, or kills the app mid-step? A half-created record, an orphaned
+   file, a one-shot flag consumed before the thing it guards actually happened,
+   a credential stored with nothing to use it on.
+2. LOST INPUT. Any value typed or picked that can be silently discarded - a
+   sheet dismissed mid-edit, a field never committed on close, an await after
+   which the writer is gone.
+3. STATE THAT LIES. A value read once and never refreshed; a summary of a
+   heterogeneous list that shows one item's setting while writing to all of
+   them; an optimistic update never rolled back on failure.
+4. FABRICATION. Any place a number or status is shown that the system does not
+   actually know - a zero rendered where "unknown" is the truth, an estimate
+   presented as a measurement, a default substituted for a failed parse.
+5. THE FIRST-RUN SPECIFICS. Anything that behaves differently on a fresh
+   install, after a reinstall, or on a device where a platform capability is
+   missing entirely.
+
+For EVERY finding: SEVERITY, file:line, a CONCRETE sequence of user actions
+leading to a specific wrong outcome, why existing tests miss it, the minimal fix.
+
+Then TWO more sections:
+- "HELD UP": what you checked and found correct, one line each.
+- "POLISH": up to 5 concrete UX gaps this journey has - a state with no
+  affordance, an action with no feedback, a number with no unit, an empty state
+  that says nothing useful. Each with file:line and one sentence of rationale.
+
+Rules: verify each claim against the code and quote the lines. No style opinions.
+A confident wrong finding is worse than no finding. Stop at your 10 strongest.
