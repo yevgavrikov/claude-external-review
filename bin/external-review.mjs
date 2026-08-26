@@ -131,10 +131,12 @@ async function cmdQuota() {
     console.log(C.y('\n  Free-model request cap'));
     console.log(C.dim(
       '  OpenRouter limits :free models to 50 requests/day, raised to 1000/day\n' +
-      '  once the account has purchased 10 credits at any point. That cap is not\n' +
-      '  exposed by the API, so it is not shown above — but it is what usually\n' +
-      '  stops a long review. Symptom: the run dies partway with\n' +
-      '  "Rate limit exceeded: free-models-per-day-…".\n\n' +
+      '  once the account has purchased 10 credits at any point. The cap is\n' +
+      '  ACCOUNT-WIDE across all free models — switching to a different free\n' +
+      '  model does not get you a fresh budget. It is not exposed by the API, so\n' +
+      '  it is not shown above, but it is what usually stops a long review.\n' +
+      '  Symptom: the run dies partway with\n' +
+      '  "Rate limit exceeded: free-models-per-day".\n\n' +
       '  A whole-subsystem review is typically 40-150 requests. Plan two or three\n' +
       '  passes a day on the free tier, or add credits.'));
   }
