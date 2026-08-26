@@ -183,6 +183,27 @@ Real outcomes from real passes:
 - **A pass will wander** into sibling checkouts if they exist on the machine.
   Put "work only inside the current working directory" in the prompt, and check
   the first lines of the output to see which tree it actually read.
+- **Check the working directory of every pass you launch, not just the first.**
+  This bit hard. Launching two in one shell line:
+
+  ```bash
+  cd ~/review-dir && nohup runner … & nohup runner … &     # WRONG
+  ```
+
+  The `&&` binds to the FIRST command only. The second runs in your home
+  directory, finds a stale long-lived checkout next door, and reviews *that* —
+  producing findings against code you fixed hours ago, with no error anywhere.
+  The tell is in stderr: a correct pass reads `lib/foo.dart`, a wandering one
+  reads `myproject/lib/foo.dart`. Wrap each launch in its own subshell:
+
+  ```bash
+  (cd ~/review-dir && nohup runner … &)
+  (cd ~/review-dir && nohup runner … &)
+  ```
+
+  Related: never sync to a long-lived checkout in the first place. If the only
+  copy on the machine is the dated one you just made, a wandering pass has
+  nowhere stale to wander to.
 - **Run two or three concurrently** on different scopes; a pass is mostly waiting
   on an API.
 - **`stderr` is the liveness signal** — it shows which files are being read.
