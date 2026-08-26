@@ -6,7 +6,9 @@
 // the whole thing should be auditable in one sitting.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import {
+  existsSync, readFileSync, writeFileSync, readdirSync, statSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -264,6 +266,146 @@ async function cmdProviders(args) {
   }
 }
 
+
+// -------------------------------------------------------------------- scan
+
+/* Content-based secret detection.
+ *
+ * The exclusion list catches a credential that lives in a FILE NAMED like a
+ * credential. It does nothing about the far commoner case: a live key pasted
+ * into an ordinary source file. `config.js` matches no pattern, and ships.
+ *
+ * Patterns are deliberately high-signal. A scanner that cries wolf gets
+ * `--force`d past on the second run and then protects nobody, so anything
+ * heuristic enough to fire on real code is left out. This finds keys with
+ * distinctive prefixes and real private-key blocks; it will NOT find every
+ * secret, and the report says so rather than implying a clean bill of health.
+ */
+/* A private key SPANS LINES, so the per-line scan below cannot see it: the
+ * header is on one line and the base64 on the next. It also needs that base64
+ * to be present at all - a lone header is almost always a PARSER stripping it,
+ * which is what a real repo's only false positive of this class turned out to
+ * be. So it gets its own whole-text pattern, matched separately.
+ */
+const PRIVATE_KEY_BLOCK =
+  /-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----[\r\n\\]+\s*[A-Za-z0-9+/=]{20,}/;
+
+const SECRET_PATTERNS = [
+  ['AWS access key id', /\bAKIA[0-9A-Z]{16}\b/],
+  ['GitHub token', /\bgh[pousr]_[A-Za-z0-9]{36,}\b/],
+  ['Slack token', /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/],
+  ['Stripe live key', /\bsk_live_[A-Za-z0-9]{20,}\b/],
+  ['OpenAI-style key', /\bsk-[A-Za-z0-9]{20,}\b/],
+  ['OpenRouter key', /\bsk-or-v1-[A-Za-z0-9]{20,}\b/],
+  ['Google API key', /\bAIza[0-9A-Za-z_-]{35}\b/],
+  ['Anthropic key', /\bsk-ant-[A-Za-z0-9_-]{20,}\b/],
+  ['JWT', /\bey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+  ['connection string with password', /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s:@/]+@[^\s/]+/],
+];
+
+const SCAN_SKIP_DIRS = new Set([
+  '.git', 'node_modules', 'build', 'dist', 'target', '.venv', 'venv',
+  '__pycache__', '.dart_tool', '.gradle', 'Pods', 'vendor', '.next',
+]);
+
+const SCAN_SKIP_EXT = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.pdf', '.zip',
+  '.gz', '.tar', '.mp4', '.mov', '.mp3', '.woff', '.woff2', '.ttf', '.otf',
+  '.jks', '.keystore', '.p12', '.der', '.apk', '.aab', '.so', '.dylib',
+]);
+
+/* Files whose "secrets" are public by design.
+ *
+ * Firebase client config (API key, app id, sender id) is an IDENTIFIER, not a
+ * credential: Google documents it as safe to embed, and access is gated by app
+ * signature / bundle id and security rules, not by the key. Every mobile repo
+ * has these committed, so flagging them trains people to ignore the scanner -
+ * which costs more than the warning is worth.
+ */
+const PUBLIC_BY_DESIGN = [
+  /(^|\/)google-services\.json$/,
+  /(^|\/)GoogleService-Info\.plist$/,
+  /(^|\/)firebase_options\.dart$/,
+  /(^|\/)firebase-config\.(js|ts|json)$/,
+];
+
+function scanTree(root) {
+  const hits = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SCAN_SKIP_DIRS.has(e.name)) walk(full);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const dot = e.name.lastIndexOf('.');
+      if (dot > 0 && SCAN_SKIP_EXT.has(e.name.slice(dot).toLowerCase())) continue;
+      const rel = full.slice(root.length + 1);
+      if (PUBLIC_BY_DESIGN.some((re) => re.test(rel))) continue;
+      let text;
+      try {
+        if (statSync(full).size > 2_000_000) continue; // not source
+        text = readFileSync(full, 'utf8');
+      } catch { continue; }
+      if (text.includes('\u0000')) continue; // binary
+
+      const pem = PRIVATE_KEY_BLOCK.exec(text);
+      if (pem) {
+        hits.push({
+          file: rel,
+          line: text.slice(0, pem.index).split('\n').length,
+          label: 'private key block',
+        });
+      }
+
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        for (const [label, re] of SECRET_PATTERNS) {
+          if (re.test(lines[i])) {
+            hits.push({ file: rel, line: i + 1, label });
+            break;
+          }
+        }
+      }
+    }
+  };
+  walk(root);
+  return hits;
+}
+
+function cmdScan(args) {
+  const root = argValue(args, '--in') ?? process.cwd();
+  const hits = scanTree(root);
+
+  if (hits.length === 0) {
+    console.log(C.g(`\n  no high-signal secrets found in ${root}`));
+    console.log(C.dim(
+      '\n  This is NOT a clean bill of health. It looks for credentials with\n' +
+      '  distinctive shapes - key prefixes, private-key blocks, passworded\n' +
+      '  connection strings. A bare 32-character token in a config file looks\n' +
+      '  exactly like any other string and cannot be found this way.\n' +
+      '  Read your own diff before sending it somewhere.\n'));
+    return hits;
+  }
+
+  console.log(C.r(`\n  ${hits.length} possible secret(s) in ${root}\n`));
+  for (const h of hits) {
+    console.log(`  ${C.y(h.label.padEnd(28))} ${h.file}:${h.line}`);
+  }
+  console.log(C.dim(
+    '\n  Filename exclusions would NOT stop these - they are inside ordinary\n' +
+    '  source files. Before sending this tree to a model:\n' +
+    '    - move the value to an environment variable, or\n' +
+    '    - add the file with --exclude, or\n' +
+    '    - confirm it is a placeholder / already-public identifier.\n' +
+    '  If a live credential has already been sent, rotate it. A provider\n' +
+    '  retention policy is not a recall.\n'));
+  return hits;
+}
+
 // -------------------------------------------------------------------- sync
 
 const DEFAULT_EXCLUDES = [
@@ -285,6 +427,19 @@ function cmdSync(args) {
   const src = argValue(args, '--from') ?? process.cwd();
   const extra = args.filter((a, i) => args[i - 1] === '--exclude');
   if (!dest) die('usage: external-review sync --to user@host:~/review-dir [--from .] [--exclude PATH]');
+
+  // SCAN BEFORE SENDING, and refuse by default. This is the whole reason the
+  // command exists rather than telling people to run rsync themselves: the
+  // moment a review copy leaves the machine is the last moment anything can be
+  // done about a key inside it.
+  if (!args.includes('--skip-scan')) {
+    const hits = cmdScan(['--in', src]);
+    if (hits.length && !args.includes('--force')) {
+      die('refusing to sync. Resolve the findings above, or pass --force if ' +
+          'every one is a placeholder or an already-public identifier.');
+    }
+    if (hits.length) info('--force given; syncing anyway');
+  }
 
   const excludes = [...DEFAULT_EXCLUDES, ...extra].flatMap((e) => ['--exclude', e]);
   info(`syncing ${src} → ${dest}`);
@@ -357,6 +512,8 @@ ${C.b('Commands')}
   models [--free] [--all]    candidate models, ranked by context window
          [--min-context N] [--limit N]
   providers <model-id>       who actually serves that model, and from where
+  scan [--in DIR]            find credentials INSIDE source files, which no
+                             filename exclusion can catch
   sync --to HOST:DIR         copy your source to a review machine, secrets
        [--from DIR] [--exclude PATH]   excluded — then VERIFY they are absent
   run --prompt FILE --model ID [--in DIR] [--out FILE]
@@ -376,7 +533,7 @@ ${C.dim('https://github.com/yevgavrikov/claude-external-review')}
 const [cmd, ...rest] = process.argv.slice(2);
 const run = {
   doctor: cmdDoctor, quota: cmdQuota, models: cmdModels,
-  providers: cmdProviders, sync: cmdSync, run: cmdRun,
+  providers: cmdProviders, scan: cmdScan, sync: cmdSync, run: cmdRun,
 }[cmd];
 
 if (!run) { console.log(HELP); process.exit(cmd ? 1 : 0); }

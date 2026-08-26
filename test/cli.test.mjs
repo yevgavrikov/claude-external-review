@@ -3,7 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const BIN = new URL('../bin/external-review.mjs', import.meta.url).pathname;
 const src = readFileSync(BIN, 'utf8');
@@ -103,4 +105,70 @@ test('quota distinguishes the stealth pool from the :free pool', () => {
   assert.match(src, /free-models-per-day-stealth/);
   assert.match(src, /1000\/day|1000 requests/);
   assert.match(src, /20\/minute|20 requests/);
+});
+
+// --- content scanning ------------------------------------------------------
+// Filename exclusion cannot see a key pasted into an ordinary source file, and
+// that is the commoner case by far.
+
+test('scan finds credentials inside a normal source file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  // ASSEMBLED AT RUNTIME so the literals never appear in this file.
+  //
+  // The first version of this test hardcoded them, and GitHub's own push
+  // protection rejected the commit - a secret scanner's test fixtures look
+  // exactly like secrets, because that is their job. Allowlisting the "secret"
+  // would have been the wrong fix: it teaches the repo to ignore that class,
+  // and the next one might be real.
+  const stripe = ['sk', 'live', '51H8xQ2eZvKYlo2Cabcdefghijklmnop'].join('_');
+  const aws = 'AKIA' + 'IOSFODNN7EXAMPLE';
+  writeFileSync(join(dir, 'config.js'), [
+    `const S = "${stripe}";`,
+    `const A = "${aws}";`,
+    'const c = "postgres://admin:hunter2@db.internal:5432/prod";',
+  ].join('\n'));
+  const out = run(['scan', '--in', dir]);
+  assert.match(out, /3 possible secret/);
+  assert.match(out, /Stripe live key/);
+  assert.match(out, /AWS access key id/);
+  assert.match(out, /connection string with password/);
+});
+
+test('scan does not flag config that is public by design', () => {
+  // Firebase client config is an identifier, not a credential. Flagging what
+  // every mobile repo commits teaches people to ignore the scanner, which
+  // costs more than the warning is worth.
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  writeFileSync(join(dir, 'firebase_options.dart'),
+    'apiKey: "AIzaSyAhGmmMRLrt19Jl9AwpCWo1c41k0tAkNyQ",');
+  assert.match(run(['scan', '--in', dir]), /no high-signal secrets/);
+});
+
+test('a bare private-key HEADER is a parser, not a key', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  writeFileSync(join(dir, 'pem.js'),
+    "pem.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/\\s+/g, '');");
+  assert.match(run(['scan', '--in', dir]), /no high-signal secrets/);
+});
+
+test('a real private-key block IS flagged', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  writeFileSync(join(dir, 'key.txt'),
+    '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ==\n');
+  assert.match(run(['scan', '--in', dir]), /private key block/);
+});
+
+test('a clean scan does not claim the tree is clean', () => {
+  // Overclaiming here is worse than not scanning: it converts "I checked" into
+  // "it is safe", which is not what a pattern matcher can tell you.
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  writeFileSync(join(dir, 'a.js'), 'export const x = 1;');
+  assert.match(run(['scan', '--in', dir]), /NOT a clean bill of health/);
+});
+
+test('sync refuses when the scan finds something', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  writeFileSync(join(dir, 'c.js'), 'const A = "AKIAIOSFODNN7EXAMPLE";');
+  const out = run(['sync', '--from', dir, '--to', 'nobody@nowhere:/tmp/x']);
+  assert.match(out, /refusing to sync/);
 });

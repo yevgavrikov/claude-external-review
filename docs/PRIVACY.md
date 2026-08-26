@@ -127,11 +127,56 @@ If a secret does reach a review copy, treat it as disclosed: delete the copy,
 rotate the credential, and do not rely on the provider's retention policy to
 make it un-disclosed.
 
-## Running the review somewhere else
+## Running the review on a VM or VPS
 
-The remote workflow exists so the review runs on a machine that is not your
-laptop — a VM, a spare box. That changes where the *runner* executes; it does
-not change what is sent to the model. The privacy question is the same either
-way. What it does buy you is a clean, dated, minimal copy of the source with the
-secrets already stripped, which is easier to reason about than "my whole working
-tree, including whatever I have uncommitted right now".
+Worth doing. Also worth being precise about, because the reason people usually
+give for it is the one thing it does not help with.
+
+**It does NOT reduce what the model sees.** The prompt is byte-for-byte the
+same whether the runner executes on your laptop or on a box in a datacenter.
+If the endpoint may train on your code, it may train on it either way. Anyone
+telling you a VM makes the *disclosure* safer is confusing two different risks.
+
+**What it genuinely does:**
+
+**1. It contains the runner, which is the under-discussed risk.** A review
+runner is a third-party binary executing an agentic loop with filesystem access
+and, usually, shell access. It reads whatever it decides it needs. On your
+laptop that neighbourhood includes `~/.ssh`, your cloud credentials, your
+browser profile, your password-manager exports, your other clients' repositories
+and every uncommitted branch you have. On a throwaway VM it includes a dated
+copy of one project.
+
+That is not a hypothetical about malice — it is about scope. Agentic tools
+wander. On a real run, a pass launched from the wrong working directory found a
+sibling checkout and reviewed *that* instead, unprompted and without error. It
+had no reason to and no instruction to. It just could.
+
+**2. It keeps your API key off your daily machine.** The key lives on the box
+that uses it. A key on a laptop is a key in a laptop backup.
+
+**3. It forces a clean, dated, minimal copy.** You review exactly what you
+synced — not your working tree with its uncommitted experiments, its `.env.local`
+and its half-finished spike branch. This is also the only way `scan` and the
+exclusion verification can mean anything, because they run against a snapshot
+rather than a moving target.
+
+**4. It makes the blast radius disposable.** If something goes wrong — a secret
+synced by mistake, a runner that misbehaves — you destroy the VM. You cannot
+destroy your laptop.
+
+**How to set it up sensibly**
+
+- A cheap VPS or a local VM is fine. It needs a shell, `rsync` and the runner;
+  it does not need to be fast, because the work happens at the API.
+- Give it **no standing credentials** beyond the model API key. No cloud
+  provider keys, no deploy keys, no production access.
+- Sync to a **dated directory per review**, never to a long-lived checkout.
+  Delete it afterwards. A stale checkout on the review box is how a pass ends up
+  reviewing code you fixed hours ago and reporting it as broken.
+- Do not develop on it. The moment it becomes a second workstation it has the
+  same neighbourhood problem as the first one.
+
+**When it is not worth it:** reviewing open-source code you would publish
+anyway. The runner-containment argument still applies, but the stakes are low
+enough that a local run in a clean checkout is a reasonable trade.

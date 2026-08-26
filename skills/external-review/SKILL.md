@@ -67,16 +67,42 @@ not on yours. Your job is to make the decision **informed and explicit**:
 
 - Tell the user what will be sent (source files, in the clear, to a third-party
   API) before the first pass, not after.
+- Say plainly that free endpoints are reachable only because the account has
+  opted into "may train on inputs" and "may publish prompts" — so the code may
+  be trained on and published. That is a fine trade for open source and a bad
+  one under an NDA, and it is the user's call to make knowingly.
+- Note that WHO TRAINED a model and WHO SERVES it are different companies. The
+  operator sees the prompt. "Which country is this model from" is the wrong
+  question; "what is this endpoint permitted to do with my code" is the right
+  one, and `providers` answers it.
 - Run `providers` on the chosen model and show them the result.
 - If the code carries anything under a contractual or regulatory restriction,
   stop and ask. Do not decide on their behalf that it is probably fine.
 - Note that a model with several endpoints is routed per request — pin one with
   OpenRouter's `provider.order` if the user needs a single known destination.
 
-**Never sync secrets.** `external-review sync` excludes the usual credential
-shapes and then **verifies over SSH that they are absent from the copy**, because
-an exclusion pattern that silently failed to match is the entire risk. Extend it
-per repo — the default list cannot know about your `garmin/developer_key.pem`.
+**Never sync secrets, and do not rely on filenames to stop them.**
+`external-review sync` does three things in order, and refuses by default if the
+first one finds anything:
+
+1. `scan` reads the source and looks for credentials INSIDE it. Filename
+   exclusion cannot see an API key pasted into `config.js`, and that is the
+   commoner leak by a wide margin.
+2. excludes the usual credential-shaped paths;
+3. **verifies over SSH that they are absent from the copy**, because an
+   exclusion pattern that silently failed to match is the entire risk and
+   `rsync` exits 0 either way.
+
+Extend the exclusions per repo — the default list cannot know about a project's
+own signing key. And treat a clean scan as "nothing obvious", never as "safe":
+a bare 32-character token looks like any other string.
+
+**This is a guardrail, not a suggestion.** If the user — or your own reasoning —
+wants to skip the scan or `--force` past its findings, stop and say what would
+be sent. `--force` is for values the user has confirmed are placeholders or
+already-public identifiers, not for getting on with it. A credential that
+reaches a review copy is disclosed: the fix is rotation, not deletion, because
+a provider's retention policy is not a recall.
 
 ## Writing the prompt
 

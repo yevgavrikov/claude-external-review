@@ -13,19 +13,19 @@ Your assistant reviews its own work with the assumptions that produced it. A
 model from a different lineage does not share them, so it sees defects yours
 walks past — not because it is smarter.
 
-In one day of using this on a production Flutter app, a second model found
-about forty real defects that four in-house review passes had missed. Two were
-severe data loss:
+In one day of use on a production mobile app, a second model found around forty
+real defects that four in-house review passes had missed. Two were severe data
+loss, and both are shapes you will recognise:
 
-- Reconnecting a disconnected bike computer **erased every kilometre ridden
-  while it was disconnected** — because the reconnect re-ran a one-time
-  calibration. The sync path had guarded against exactly this for months. The
-  link path never did.
-- A single mistyped value in stored JSON (`"isEbike": 1` instead of `true`)
-  **deleted an entire bike** — its components, service history and receipts —
-  and the next autosave made it permanent. Seventeen fields had this shape.
+- **Reconnecting a device re-ran a one-time calibration**, silently erasing
+  every unit of usage recorded while it was disconnected. The sync path had
+  guarded against exactly this for months. The link path never did.
+- **A single mistyped value in stored JSON deleted an entire record** — `1`
+  where a boolean was expected — taking its children, its history and its
+  attachments with it. The next autosave made it permanent. Seventeen fields
+  had the same shape.
 
-Both had the same signature, and it is the thing this skill teaches you to hunt:
+Both had one signature, and it is the thing this skill teaches you to hunt:
 
 > **The codebase already argued the correct rule somewhere else, and had not
 > applied it here.**
@@ -191,6 +191,13 @@ never heard of".** Not reassurance — facts. Who operates the machine, where
 they are based, where they publish their datacenters, and a link to the policy
 you would actually be agreeing to.
 
+Note what the question actually turns on. **Who trained a model and who serves
+it are different companies.** A model may be trained by one organisation and
+run by four unrelated providers, any of which may take your request — and it is
+the *operator* who sees your prompt. So "is this model from a country I trust"
+is the wrong question; "what is this endpoint permitted to do with my code" is
+the right one, and it is the one this command answers.
+
 For a **free** model it adds the part people miss. OpenRouter will not route to
 free endpoints at all unless your account has enabled *"free endpoints that may
 train on inputs"* and *"free endpoints that may publish prompts"* — so if free
@@ -226,8 +233,15 @@ external-review run --prompt ./examples/prompts/data-integrity.txt \
                     --out findings.md
 ```
 
-Reviewing on another machine? Sync first — secrets excluded, then **verified
-absent**:
+Reviewing on a VM or VPS? Recommended — but for narrower reasons than usual.
+It does **not** change what the model sees; the prompt is identical either way.
+What it does is contain the *runner*: a third-party binary running an agentic
+loop with filesystem access, which on your laptop sits next to `~/.ssh`, your
+cloud credentials and every other client's repo. On a throwaway box it sits next
+to one dated copy of one project. [`docs/PRIVACY.md`](docs/PRIVACY.md) has the
+full argument and a setup checklist.
+
+Sync first — scanned, secrets excluded, then **verified absent**:
 
 ```bash
 external-review sync --to you@review-box:~/review-2026-08-26 \
@@ -273,7 +287,8 @@ codebases.
 | `quota` | spend so far, credit limit, free-tier cap |
 | `models [--free] [--all] [--min-context N] [--limit N]` | candidates by context window |
 | `providers <model-id>` | who serves it, HQ, datacenters, policy links |
-| `sync --to HOST:DIR [--from DIR] [--exclude PATH]` | copy source, excluding secrets, then verify |
+| `scan [--in DIR]` | find credentials **inside** source files, which no filename exclusion catches |
+| `sync --to HOST:DIR [--from DIR] [--exclude PATH]` | scan, refuse if anything is found, copy excluding secrets, then verify |
 | `run --prompt FILE --model ID [--in DIR] [--out FILE]` | run a pass |
 
 ---

@@ -84,6 +84,27 @@ different branch, say. Reverting the fix is the half that always works.
 
 ---
 
+## 2b. A secret scanner's test fixtures look exactly like secrets
+
+Worth knowing before you write them. The first commit of this repo's own scanner
+tests was rejected by GitHub push protection: the fixture contained a
+Stripe-key-shaped string, which is precisely what the test needs to contain.
+
+The wrong fix is the allowlist link in the rejection message. It teaches the
+repository to ignore that class of finding, and the next one might be real.
+
+The right fix is to assemble the literal at runtime so it never appears in the
+source:
+
+```js
+const stripe = ['sk', 'live', '51H8xQ2eZvKYlo2Cabcdefghijklmnop'].join('_');
+```
+
+Same reasoning as §3 below: a fixture that trains a safety mechanism to stay
+quiet is worse than no fixture.
+
+---
+
 ## 3. Your existing tests may pin the bug as correct
 
 Two separate codebases had a test whose "corrupt record" fixture was really a
