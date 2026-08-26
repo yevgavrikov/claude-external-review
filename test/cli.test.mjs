@@ -168,7 +168,8 @@ test('a clean scan does not claim the tree is clean', () => {
 
 test('sync refuses when the scan finds something', () => {
   const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
-  writeFileSync(join(dir, 'c.js'), 'const A = "AKIAIOSFODNN7EXAMPLE";');
+  // Assembled, like the fixture above: a scanner's test data is scanner bait.
+  writeFileSync(join(dir, 'c.js'), `const A = "${'AKIA' + 'IOSFODNN7EXAMPLE'}";`);
   const out = run(['sync', '--from', dir, '--to', 'nobody@nowhere:/tmp/x']);
   assert.match(out, /refusing to sync/);
 });
