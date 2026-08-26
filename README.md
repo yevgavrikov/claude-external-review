@@ -126,12 +126,24 @@ Account
   exposed by the API, so it is not shown above — but it is what usually
   stops a long review.
 
-  A whole-subsystem review is typically 40-150 requests. Plan two or three
-  passes a day on the free tier, or add credits.
+  A whole-subsystem review is 40-150 requests. On the free tier that is
+  ONE pass, maybe two. Add credits, or use stealth models, or expect to
+  plan a day at a time.
 ```
 
 This matters more than it sounds. Runs die **partway**, having read your code
-and reported nothing, and the reason appears only in stderr. Budget first.
+and reported nothing, and the reason appears only in stderr.
+
+There are **two separate pools**, which is why a day can run far past 50
+requests and then stop abruptly:
+
+| | pool | cap |
+|---|---|---|
+| `:free` models | `free-models-per-day` | 50/day, or 1000/day once you have ever bought 10 credits. 20/min either way. |
+| stealth / cloaked | `free-models-per-day-stealth` | separate, much larger |
+
+Both reset on the UTC day. The `:free` counter is account-wide, so switching
+free models buys nothing — switching to a *stealth* model does.
 
 ### 2. Pick a model
 
@@ -179,9 +191,32 @@ never heard of".** Not reassurance — facts. Who operates the machine, where
 they are based, where they publish their datacenters, and a link to the policy
 you would actually be agreeing to.
 
-Whether that is acceptable depends on your obligations, not on ours. A model
-with several endpoints is routed per request; pin one with OpenRouter's
-`provider.order` if you need a single known destination.
+For a **free** model it adds the part people miss. OpenRouter will not route to
+free endpoints at all unless your account has enabled *"free endpoints that may
+train on inputs"* and *"free endpoints that may publish prompts"* — so if free
+models work for you, those are on, and **the code you send may be trained on and
+published.** That is the trade, and it is a reasonable one for open source. It
+is not reasonable for code under an NDA.
+
+For a **stealth** model — an unreleased model shipped anonymously to gather
+usage — it tells you that no provider is published at all:
+
+```
+Ox Alpha
+
+  This model does not disclose its providers.
+
+  So the questions this command exists to answer — who operates it, from
+  where, under which policy — have no available answer. What IS known is
+  the arrangement: these models are offered free because prompts and
+  completions are logged and used to improve them. That is their purpose,
+  not a side effect.
+```
+
+The remedy, when you need one, is **Zero Data Retention**: an account toggle, a
+per-key guardrail, or `"zdr": true` per request. It blocks storage and training
+— and removes most free endpoints, which is the same trade seen from the other
+side. [`docs/PRIVACY.md`](docs/PRIVACY.md) has the decision table.
 
 ### 4. Run a pass
 

@@ -69,3 +69,38 @@ test('the key is never written to stdout in full', () => {
     'a bare key is logged somewhere');
   assert.match(src, /key\.slice\(0, 8\)/, 'doctor should print a fingerprint');
 });
+
+// --- data-policy disclosure ------------------------------------------------
+// Researched 2026-08-26: OpenRouter will not route to free endpoints at all
+// unless the account has opted into "may train on inputs" and "may publish
+// prompts". So a working free model implies those are on, and the source being
+// reviewed may be trained on. That is the single most important thing this tool
+// can tell someone, and it must be said where the choice is made.
+
+test('the free-endpoint data-policy warning exists and names both toggles', () => {
+  assert.match(src, /may train on inputs/);
+  assert.match(src, /may publish prompts/);
+  assert.match(src, /Zero Data Retention|zdr/i,
+    'the warning must name the actual remedy, not just the problem');
+});
+
+test('the warning is gated on endpoint PRICING, not on the id string', () => {
+  // The canonical slug this command takes has no `:free` suffix, so matching on
+  // the name missed exactly the models the warning is for.
+  assert.match(src, /endpoints\.some\(\(e\) => isFree\(e\)\)/);
+});
+
+test('a model with NO published endpoints is handled as an answer', () => {
+  // Stealth models list no provider at all. "I could not tell you who runs it"
+  // is the most useful thing to say there, not an empty list or a crash.
+  assert.match(src, /does not disclose its providers/);
+  assert.match(src, /endpoints\.length === 0/);
+});
+
+test('quota distinguishes the stealth pool from the :free pool', () => {
+  // Nine passes ran in one day because the stealth model draws on a separate,
+  // much larger allowance. Conflating the two makes the stop look inexplicable.
+  assert.match(src, /free-models-per-day-stealth/);
+  assert.match(src, /1000\/day|1000 requests/);
+  assert.match(src, /20\/minute|20 requests/);
+});

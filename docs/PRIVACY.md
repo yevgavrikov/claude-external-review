@@ -45,10 +45,49 @@ Things worth knowing while you decide:
 may serve a given call. To pin one, use OpenRouter's `provider.order` routing
 or pick a model with a single endpoint.
 
-**"Free" is a business model, not a gift.** Free endpoints are frequently subject
-to different data-retention terms than paid ones — often including using traffic
-to improve models. If retention matters to you, read the policy for the specific
-endpoint, and prefer a paid endpoint from a provider whose terms you accept.
+**"Free" is a business model, and on OpenRouter the price is your data.** This
+is stronger than a caveat and it is the single most important thing on this
+page.
+
+To use free models at all you must enable, in Settings → Privacy:
+
+- *"Enable free endpoints that may train on inputs"*
+- *"Enable free endpoints that may publish prompts"*
+
+Without them, free models return
+`404: No endpoints available matching your guardrail restrictions and data
+policy`. So if free models work for you, those toggles are on, and **the code
+you send is permitted to be trained on and published.**
+
+**Stealth models are the same deal, more so.** A "stealth" or "cloaked" model is
+an unreleased model shipped under an anonymous name to gather real-world usage.
+That is the entire point: prompts and completions are logged and used to improve
+it. They are attractive for review work — often frontier-class, large context,
+free — and they are the least private option on the menu.
+
+**Zero Data Retention is the actual control.** ZDR means a provider will not
+store your data for any period, and cannot train on it. Enable it three ways:
+
+- account-wide, in privacy settings, globally or per model group;
+- per API key, as a guardrail, which is how you give a teammate a key that
+  cannot leak;
+- per request: `"zdr": true` in the provider preferences.
+
+The cost is real: ZDR **removes endpoints**, including most or all free ones,
+and it does not cover plugins such as web search, which carry their own
+policies.
+
+So the decision is simple to state, if not to make:
+
+| If the code is… | Use |
+|---|---|
+| open source, or you do not mind it training a model | free endpoints — that is the trade |
+| private but not contractually restricted | a paid endpoint whose terms you have read |
+| under NDA, customer contract, or a residency rule | ZDR, or a model you host yourself |
+
+Do not let "it is only a code review" carry the decision. A review prompt
+contains more of your source, in one place, than almost anything else you send
+anywhere.
 
 **Self-hosting removes the question.** A local model via Ollama or vLLM, or a
 model on infrastructure you control, sends nothing anywhere. It costs you

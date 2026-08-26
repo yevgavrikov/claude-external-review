@@ -130,15 +130,22 @@ async function cmdQuota() {
   if (data.is_free_tier) {
     console.log(C.y('\n  Free-model request cap'));
     console.log(C.dim(
-      '  OpenRouter limits :free models to 50 requests/day, raised to 1000/day\n' +
-      '  once the account has purchased 10 credits at any point. The cap is\n' +
-      '  ACCOUNT-WIDE across all free models — switching to a different free\n' +
-      '  model does not get you a fresh budget. It is not exposed by the API, so\n' +
-      '  it is not shown above, but it is what usually stops a long review.\n' +
-      '  Symptom: the run dies partway with\n' +
-      '  "Rate limit exceeded: free-models-per-day".\n\n' +
-      '  A whole-subsystem review is typically 40-150 requests. Plan two or three\n' +
-      '  passes a day on the free tier, or add credits.'));
+      '  :free models      50 requests/day, and 20/minute.\n' +
+      '                    1000/day once the account has EVER purchased 10\n' +
+      '                    credits — permanent, not a subscription.\n' +
+      '  resets            on the UTC day.\n\n' +
+      '  The daily counter is ACCOUNT-WIDE across every :free model, so switching\n' +
+      '  free models does not get you a fresh budget. It is not exposed by the\n' +
+      '  API, which is why it is not shown above.\n\n' +
+      '  STEALTH MODELS DRAW ON A SEPARATE POOL. An anonymous/cloaked preview\n' +
+      '  model is not a :free model and has its own, much larger allowance —\n' +
+      '  which is why a day can run far past 50 requests and then stop abruptly\n' +
+      '  when you switch to a genuine :free model. The two errors differ:\n' +
+      '    "Rate limit exceeded: free-models-per-day-stealth"  → stealth pool\n' +
+      '    "Rate limit exceeded: free-models-per-day"          → the 50/day pool\n\n' +
+      '  A whole-subsystem review is 40-150 requests. On the free tier that is\n' +
+      '  ONE pass, maybe two. Add credits, or use stealth models, or expect to\n' +
+      '  plan a day at a time.'));
   }
   console.log();
 }
@@ -188,9 +195,33 @@ async function cmdProviders(args) {
   const byName = new Map(providers.map((p) => [p.name, p]));
 
   console.log(C.b(`\n${detail.name || model}\n`));
+
+  const endpoints = detail.endpoints || [];
+
+  // NO ENDPOINTS is an answer, not an error - and the most important one this
+  // command can give. Stealth and cloaked models publish no provider at all, so
+  // there is nothing to look up: you cannot learn who runs the machine your
+  // source is about to be sent to.
+  if (endpoints.length === 0) {
+    console.log(C.y('  This model does not disclose its providers.\n'));
+    console.log(C.dim(
+      '  OpenRouter lists no endpoints for it, which is characteristic of a\n' +
+      '  STEALTH or CLOAKED model: an unreleased model shipped under an\n' +
+      '  anonymous name to gather real-world usage before launch.\n\n' +
+      '  So the questions this command exists to answer — who operates it, from\n' +
+      '  where, under which policy — have no available answer. What IS known is\n' +
+      '  the arrangement: these models are offered free because prompts and\n' +
+      '  completions are logged and used to improve them. That is their purpose,\n' +
+      '  not a side effect.\n\n' +
+      '  They are genuinely good at review work and frequently frontier-class.\n' +
+      '  Use one with code you would not mind training a model. For anything\n' +
+      '  else, pick a model that names its providers.\n'));
+    return;
+  }
+
   console.log(C.dim('  Your prompt is sent to ONE of these, chosen per request.\n'));
 
-  for (const ep of detail.endpoints || []) {
+  for (const ep of endpoints) {
     const p = byName.get(ep.provider_name) || {};
     const hq = p.headquarters || '?';
     const dcs = Array.isArray(p.datacenters) && p.datacenters.length
@@ -210,6 +241,27 @@ async function cmdProviders(args) {
     '  that depends on your obligations, not on ours. Read the linked policy.\n\n' +
     '  To pin a single provider, use OpenRouter\'s `provider.order` routing, or\n' +
     '  choose a model with only one endpoint.\n'));
+
+  // Detected from the endpoints' own PRICING, not from the id string: the
+  // canonical slug this command takes has no `:free` suffix, so matching on the
+  // name missed exactly the models the warning is for.
+  const anyFree = endpoints.some((e) => isFree(e));
+  if (anyFree) {
+    console.log(C.y('  Before you send source to this one'));
+    console.log(C.dim(
+      '  Free and stealth endpoints are free because of what they may do with\n' +
+      '  your data. OpenRouter will not route to them at all unless you have\n' +
+      '  enabled, in Settings → Privacy:\n\n' +
+      '    "Enable free endpoints that may train on inputs"\n' +
+      '    "Enable free endpoints that may publish prompts"\n\n' +
+      '  If free models work for you, those are ON, and the code you send may be\n' +
+      '  trained on and published. A stealth model is an unreleased model shipped\n' +
+      '  anonymously to gather real usage — logging your prompts IS its purpose.\n\n' +
+      '  If that is not acceptable for this code, use Zero Data Retention: a\n' +
+      '  privacy-settings toggle, a per-key guardrail, or `"zdr": true` per\n' +
+      '  request. It blocks storage and training, and it removes most free\n' +
+      '  endpoints — which is the trade being made either way.\n'));
+  }
 }
 
 // -------------------------------------------------------------------- sync
