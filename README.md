@@ -423,7 +423,13 @@ codebases.
 | `runner-config [--write] [--models a,b]` | teach your runner a provider it does not ship with |
 | `scan [--in DIR]` | find credentials **inside** source files, which no filename exclusion catches |
 | `sync --to HOST:DIR [--from DIR] [--exclude PATH]` | scan, refuse if anything is found, copy excluding secrets, then verify |
-| `run --prompt FILE --model ID [--in DIR] [--out FILE]` | run a pass |
+| `run --prompt FILE --model ID [--in DIR] [--out FILE] [--retry N]` | run a pass |
+
+`run` exits **0** for a real report, **2** when the run reviewed nothing (reads
+refused, or it stopped before the report), and **3** when it was rate limited —
+printing `RETRY_AFTER_SECONDS=N` alongside. The wait reflects which kind of limit
+you hit: minutes for a per-minute ceiling, time-until-UTC-midnight for a daily
+cap. `--retry N` makes it wait and re-attempt on its own.
 
 ---
 

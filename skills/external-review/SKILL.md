@@ -293,6 +293,20 @@ requests-per-minute rather than a budget. Check `plan` before you decide whether
 to narrow the scope — the instinct to ration is right for a daily cap and wrong
 for a rate cap.
 
+`run` distinguishes the two failures by exit code, so you do not have to read
+prose to decide what to do:
+
+| exit | meaning | what to do |
+|---|---|---|
+| 0 | a real report | act on it |
+| 2 | the run reviewed nothing (refused reads, or no report) | fix the cause; retrying will not help |
+| 3 | **rate limited** | wait and re-run — it also prints `RETRY_AFTER_SECONDS=N` |
+
+The wait is computed from the KIND of limit: minutes for a per-minute ceiling,
+time-until-UTC-midnight for a daily cap. Suggesting a short retry against a daily
+cap sends you straight back into the same wall. Pass `--retry N` to have `run`
+sleep and re-attempt by itself; leave it off and drive the timing yourself.
+
 **Expect to refute findings, including severe-looking ones.** In one session
 roughly half the P1s did not survive contact with the code: one contradicted its
 own worked example, one was already pinned by a test the pass had not read, one

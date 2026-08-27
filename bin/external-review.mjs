@@ -891,6 +891,9 @@ function cmdRun(args) {
   // the model writes a paragraph about not being able to see anything. Pass the
   // directory explicitly.
   const dirFlag = /(^|\/)opencode$/.test(runner) ? ['--dir', cwd] : [];
+  const maxRetries = Number(argValue(args, '--retry') ?? 0);
+
+  const attempt = (retriesLeft) => {
   const child = spawn(runner, ['run', ...dirFlag, '-m', model, prompt], {
     cwd, stdio: ['ignore', 'pipe', 'inherit'],
   });
@@ -905,6 +908,7 @@ function cmdRun(args) {
       // commonest way a pass dies, and it dies LATE - after the model has read
       // most of the subsystem and before it has written anything.
       if (/\b429\b|too many requests|rate.?limit/i.test(buf)) {
+        const wait = rateLimitWaitSeconds(provider);
         console.error(C.y(
           `\n  RATE LIMITED by ${provider.label}` +
           (l.perMinute ? ` (its published limit is ${l.perMinute}/min).` : '.')));
@@ -913,6 +917,23 @@ function cmdRun(args) {
           '  the per-minute ceiling binds long before the daily one. Concurrency\n' +
           '  multiplies it: running N passes against one provider means N bursts.\n' +
           '  Reduce concurrency, or split the passes across providers.\n'));
+        // A MACHINE-READABLE line, and a distinct exit code, because the caller
+        // is usually a script or an assistant deciding what to do next. Telling
+        // a human "reduce concurrency" does not help either of them; telling
+        // them WHEN to come back does. Exit 3 = try again later, as opposed to
+        // exit 2 = this run reviewed nothing and retrying will not fix it.
+        console.error(`RETRY_AFTER_SECONDS=${wait}`);
+        console.error(C.dim(
+          `  Re-running costs nothing on a rate-capped provider - it is not a\n` +
+          `  budget. Wait ~${Math.round(wait / 60)} min and run the same command again,\n` +
+          '  or pass --retry to have this do it for you.\n'));
+        if (retriesLeft > 0) {
+          console.error(C.y(`  --retry: sleeping ${wait}s, then attempting again ` +
+            `(${retriesLeft} left)…\n`));
+          setTimeout(() => attempt(retriesLeft - 1), wait * 1000);
+          return;
+        }
+        process.exit(3);
       }
       process.exit(code);
     }
@@ -929,6 +950,29 @@ function cmdRun(args) {
     console.error();
     process.exit(2);
   });
+  };
+  attempt(maxRetries);
+}
+
+/* How long to wait before a rate-limited pass is worth retrying.
+ *
+ * Deliberately NOT a tight number. The providers do not send Retry-After on
+ * these, and the counters are not exposed, so anything precise here would be
+ * invented. These are conservative enough to be worth acting on: an agentic
+ * pass that just exhausted a per-minute window needs the window to clear AND
+ * the burst that filled it to age out.
+ */
+function rateLimitWaitSeconds(provider) {
+  const l = provider.limits || {};
+  // A daily cap will not clear in minutes - point at the reset instead of
+  // suggesting a retry that is certain to fail again.
+  if (l.resets === 'utc-day') {
+    const now = new Date();
+    const midnightUtc = Date.UTC(
+      now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    return Math.max(60, Math.round((midnightUtc - now.getTime()) / 1000));
+  }
+  return 420;
 }
 
 /* Decide whether a run that exited 0 actually reviewed anything.
@@ -1289,7 +1333,7 @@ ${C.b('Commands')}
                              filename exclusion can catch
   sync --to HOST:DIR         copy your source to a review machine, secrets
        [--from DIR] [--exclude PATH]   excluded — then VERIFY they are absent
-  run --prompt FILE --model ID [--in DIR] [--out FILE]
+  run --prompt FILE --model ID [--in DIR] [--out FILE] [--retry N]
 
 ${C.b('Providers')}
   Every command takes ${C.c('--provider <id>')} (or $EXTERNAL_REVIEW_PROVIDER).

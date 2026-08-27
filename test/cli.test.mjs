@@ -535,3 +535,48 @@ test('stats says what its numbers are not', () => {
   assert.match(out, /shape not recognised/,
     'a zero must not be reported as confident absence');
 });
+
+test('a rate-limited run exits 3 and says when to come back', () => {
+  // Exit 3 is distinct from 2 on purpose: 2 means this run reviewed nothing and
+  // retrying will not help, 3 means try again later. The caller is usually a
+  // script or an assistant, and "reduce concurrency" tells it nothing about WHEN.
+  const dir = mkdtempSync(join(tmpdir(), 'er-429-wait-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake,
+    '#!/bin/sh\necho \'Error: Too Many Requests: {"status":429}\'\nexit 1\n');
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this'.repeat(60));
+  // `run` refuses a provider the runner has never heard of, before it spawns
+  // anything - so the fixture has to declare it, exactly as a real user would.
+  mkdirSync(join(dir, '.config/opencode'), { recursive: true });
+  writeFileSync(join(dir, '.config/opencode/opencode.json'),
+    JSON.stringify({ provider: { nvidia: { npm: '@ai-sdk/openai-compatible' } } }));
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md'), '--provider', 'nvidia'],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             NVIDIA_API_KEY: 'nvapi-test' } });
+  assert.equal(r.status, 3, 'a rate limit is retryable; a dead review is not');
+  assert.match(r.stderr, /RETRY_AFTER_SECONDS=\d+/,
+    'the caller needs a number it can act on, not prose');
+});
+
+test('a daily-capped provider is told to wait for the reset, not for minutes', () => {
+  // Suggesting a 7-minute retry against a per-DAY cap sends the caller back to
+  // a wall it cannot clear. The wait must reflect which kind of limit it is.
+  const dir = mkdtempSync(join(tmpdir(), 'er-429-day-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake, '#!/bin/sh\necho "Rate limit exceeded"\nexit 1\n');
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this'.repeat(60));
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md'), '--provider', 'openrouter'],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  const secs = Number(/RETRY_AFTER_SECONDS=(\d+)/.exec(r.stderr)?.[1]);
+  assert.ok(secs > 420,
+    `a UTC-day reset is hours away, got ${secs}s - a minutes-long wait would ` +
+    'send the caller straight back into the same wall');
+  assert.ok(secs <= 86400);
+});
