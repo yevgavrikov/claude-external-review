@@ -294,6 +294,12 @@ spend its whole context exploring, stop before writing a single finding, and exi
 identified a real bug mid-thought. `run` fails the command when the output lacks
 the sections your prompt demanded, and keeps the output for exactly this reason.
 
+**Do not edit the tree while a pass reads it.** A forty-minute review over a
+subsystem you are also fixing will read half the old code and half the new, and
+spend its budget arguing with itself about what a file contains rather than
+finding anything. Snapshot the tree, or hold your edits until it lands. PLAYBOOK
+5a.
+
 **A rate-limited pass costs nothing to re-run** on a provider whose limit is
 requests-per-minute rather than a budget. Check `plan` before you decide whether
 to narrow the scope — the instinct to ration is right for a daily cap and wrong

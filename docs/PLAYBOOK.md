@@ -221,6 +221,33 @@ Watch especially for a **sanitiser between the fixture and the assertion**. Any
 validation layer that silently drops malformed input will turn a wrong fixture
 into an empty subject, and empty subjects compare equal to each other forever.
 
+## 5a. Never review a tree you are editing
+
+Obvious once stated, expensive when ignored, and easy to drift into when a
+review runs for forty minutes while you keep working.
+
+A pass was launched over one subsystem. Halfway through it, an agent landed a
+fix in that same subsystem. The pass had already read the model file, then read
+a test file written after the change, and spent the rest of its run trying to
+reconcile them:
+
+> the test references `sizeNote`, `bikeIds`, `acquiredDate` — but the class I
+> read only has id, category, brand, model… wait, let me re-check
+
+It never produced a finding. Every conclusion it might have drawn was against a
+tree that no longer existed, and the confusion consumed the budget that the
+review was for.
+
+**Sync to a dated snapshot and review THAT**, or freeze the working tree for the
+duration. This is the same rule as "never sync to a long-lived checkout", from
+the other direction: there, the review reads code you already fixed; here, it
+reads code you are fixing underneath it. Both produce findings about a tree
+nobody is running.
+
+The tell in the output is a model arguing with itself about what a file
+contains. If you see that, stop the pass — its remaining budget is being spent
+on an inconsistency you created, not on your code.
+
 ## 5b. A confirmed precondition is not a confirmed failure
 
 The single most expensive mistake of a full day's reviewing, made independently
