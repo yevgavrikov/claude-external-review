@@ -420,6 +420,9 @@ test('a rate-limited run says so instead of just "exited 1"', () => {
 });
 
 test('plan gives a concurrency ceiling, not just a rate', () => {
-  assert.match(run(['plan']), /keep concurrent passes to/,
+  const out = run(['plan']);
+  assert.match(out, /run \d+ pass at a time/,
     'a per-minute number alone leaves the user to guess how many passes is safe');
+  assert.match(out, /die mid-review/,
+    'the cost of exceeding it is the part that changes behaviour, not the number');
 });

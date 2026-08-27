@@ -65,10 +65,13 @@ range, never a single comforting number.
 **The per-minute ceiling binds before the daily one, and concurrency multiplies
 it.** An agentic pass BURSTS: it reads many files in quick succession, so the
 average rate is nothing like the peak. Running three passes at once against a
-40/min provider took a 429 mid-review — after the model had read most of the
-subsystem and before it had written anything — while two ran to completion. So:
-**two concurrent passes per provider, and split further work across providers
-rather than stacking it on one.** `plan` prints the ceiling; `run` names rate
+40/min provider killed TWO of them mid-review — each after the model had read
+most of its subsystem and before it had written anything. Only one finished.
+So: **one pass at a time per provider**, and split further work across providers
+rather than stacking it on one. Note the first version of this paragraph said
+two were safe, written after watching only the first casualty; the second death
+came later in the same run. Guidance from a partial observation is how a
+plausible number outlives the evidence against it. `plan` prints the ceiling; `run` names rate
 limiting explicitly when it happens, because "exited 1" is not actionable.
 
 ### Adding a provider

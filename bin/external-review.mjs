@@ -373,12 +373,21 @@ function cmdPlan(args) {
         'rate-limit error before committing a long one.');
     }
     if (l.perMinute) {
-      // Measured, not derived: three concurrent passes against a 40/min ceiling
-      // took a 429 mid-review while two ran to completion. An agentic pass
-      // bursts, so the arithmetic (requests/min ÷ pass rate) is optimistic.
-      const safe = l.perMinute >= 40 ? 2 : 1;
+      // Measured, and revised DOWNWARD once the measurement came in properly.
+      // First observation was "3 concurrent, 1 died" and the guidance written
+      // from it said 2 were safe. Watching the rest of that run, a SECOND pass
+      // died at the same ceiling; only one survived to finish. So an agentic
+      // pass on its own can approach a 40/min ceiling, and the honest number is
+      // one. 200/min providers get two - not from data, which is why it says so.
+      const safe = l.perMinute >= 200 ? 2 : 1;
       console.log(`    rate        ${l.perMinute}/min  ` +
-        C.dim(`→ keep concurrent passes to ${safe}; a pass BURSTS, so this ceiling binds first`));
+        C.dim(`→ run ${safe} pass at a time; a pass BURSTS, so this ceiling binds first`));
+      if (safe === 1) {
+        console.log(C.dim(
+          '                ' +
+          'even a single pass can reach this ceiling and die mid-review,\n                ' +
+          'after reading the subsystem and before writing anything.'));
+      }
     }
     if (l.note) console.log(C.dim(`    ${l.note.replace(/(.{68}\s)/g, '$1\n    ')}`));
     console.log();
