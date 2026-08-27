@@ -37,6 +37,15 @@ const PROVIDERS = {
     // Prefix the runner uses: opencode addresses it as openrouter/<model-id>.
     runnerPrefix: 'openrouter/',
     caps: { spend: true, pricing: true, contextLength: true, endpoints: true },
+    // Published limits, not measured ones. The per-day figure is the one that
+    // ends runs; it is account-wide across every :free model, so switching
+    // free models buys nothing.
+    limits: {
+      perDay: 50, perMinute: 20, resets: 'utc-day',
+      note: '1000/day once the account has EVER purchased 10 credits (permanent). '
+          + 'Stealth/cloaked models draw on a SEPARATE, much larger pool - when one '
+          + 'is listed, it is the only way to get a long day out of a free account.',
+    },
   },
   nvidia: {
     label: 'NVIDIA API Catalog (build.nvidia.com)',
@@ -48,15 +57,81 @@ const PROVIDERS = {
     // An OpenAI-compatible /models listing and nothing else: no pricing, no
     // context length, no per-endpoint metadata, no spend endpoint.
     caps: { spend: false, pricing: false, contextLength: false, endpoints: false },
+    limits: {
+      perDay: null, perMinute: 40, resets: 'pool', pool: 1000,
+      note: 'Credits are a POOL that does not refill overnight. When they are '
+          + 'gone you request more in the developer forums or you stop, so the '
+          + 'unit to plan in is the whole review, not the day.',
+    },
   },
 };
 
+/* Providers you add yourself, without forking this file.
+ *
+ * ~/.config/external-review/providers.json, merged over the built-ins. Anything
+ * speaking the OpenAI chat-completions shape works, which is most things now:
+ *
+ *   {
+ *     "groq":   { "base": "https://api.groq.com/openai/v1", "env": ["GROQ_API_KEY"] },
+ *     "ollama": { "base": "http://localhost:11434/v1",      "env": ["OLLAMA_KEY"] }
+ *   }
+ *
+ * CAPABILITIES DEFAULT TO FALSE, deliberately. A provider this tool has never
+ * seen gets treated as one that publishes nothing: `quota` says it cannot
+ * answer, `models` says it cannot rank by context. The alternative - assuming a
+ * new endpoint speaks OpenRouter's metadata dialect - would print an empty
+ * table that reads like a clean bill of health, which is the failure this whole
+ * tool is built to avoid. Opt in per capability once you have checked.
+ */
+const CUSTOM_PROVIDERS_FILE = join(homedir(), '.config/external-review/providers.json');
+
+function loadCustomProviders() {
+  if (!existsSync(CUSTOM_PROVIDERS_FILE)) return {};
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(CUSTOM_PROVIDERS_FILE, 'utf8'));
+  } catch (e) {
+    // Never fall back to "no custom providers" on a parse error: you would run
+    // against a DIFFERENT endpoint than the one you thought you configured.
+    die(`${CUSTOM_PROVIDERS_FILE} is not valid JSON (${e.message})`);
+  }
+  const out = {};
+  for (const [id, cfg] of Object.entries(raw)) {
+    if (!cfg?.base || !Array.isArray(cfg.env) || !cfg.env.length) {
+      die(`provider "${id}" in ${CUSTOM_PROVIDERS_FILE} needs at least "base" and a non-empty "env" array`);
+    }
+    if (!/^https?:\/\//.test(cfg.base)) die(`provider "${id}": "base" must be an http(s) URL`);
+    out[id] = {
+      label: cfg.label || id,
+      base: cfg.base.replace(/\/$/, ''),
+      env: cfg.env,
+      authStoreKey: cfg.authStoreKey || id,
+      hint: cfg.hint || `set ${cfg.env[0]}`,
+      runnerPrefix: cfg.runnerPrefix ?? `${id}/`,
+      caps: { spend: false, pricing: false, contextLength: false, endpoints: false, ...(cfg.caps || {}) },
+      limits: cfg.limits ?? { perDay: null, perMinute: null, resets: 'unknown' },
+      custom: true,
+    };
+  }
+  return out;
+}
+
+function allProviders() {
+  // User config wins, so a built-in whose base URL moved can be corrected
+  // locally without waiting for a release.
+  return { ...PROVIDERS, ...loadCustomProviders() };
+}
+
 function resolveProvider(args = []) {
+  const known = allProviders();
   const id = argValue(args, '--provider')
     ?? process.env.EXTERNAL_REVIEW_PROVIDER
     ?? 'openrouter';
-  const p = PROVIDERS[id];
-  if (!p) die(`unknown provider "${id}". Known: ${Object.keys(PROVIDERS).join(', ')}`);
+  const p = known[id];
+  if (!p) {
+    die(`unknown provider "${id}". Known: ${Object.keys(known).join(', ')}\n` +
+        `  Add your own in ${CUSTOM_PROVIDERS_FILE} — see \`external-review providers\`.`);
+  }
   return { id, ...p };
 }
 
@@ -248,6 +323,76 @@ function quotaWithoutAnEndpoint(provider) {
     '  NVIDIA API Trial Terms of Service prohibit submitting confidential data\n' +
     '  and prohibit production use - both are contractual, not advisory, and\n' +
     '  neither has an equivalent on OpenRouter.\n'));
+}
+
+/* How many passes actually fit, across everything you have configured.
+ *
+ * The observed failure this exists to prevent: a long pass dies at the daily
+ * cap having READ a lot and REPORTED nothing, and the reason appears only in
+ * stderr. Knowing the budget after that happens is worthless; the number has to
+ * arrive before the scope is chosen.
+ *
+ * A pass is taken as ~40-150 requests. That is a measured range from real
+ * whole-subsystem reviews, not a guess, but it varies with how much the model
+ * chooses to read - which is why this reports a RANGE and never a single
+ * comforting number.
+ */
+const PASS_COST = { min: 40, typical: 90, max: 150 };
+
+function cmdPlan(args) {
+  const known = allProviders();
+  const only = argValue(args, '--provider');
+  const entries = Object.entries(known).filter(([id]) => !only || id === only);
+
+  console.log(C.b('\nWhat fits, per provider\n'));
+  const advice = [];
+  for (const [id, p] of entries) {
+    const key = apiKey({ ...p, env: p.env, authStoreKey: p.authStoreKey }, { required: false });
+    const l = p.limits || {};
+    console.log(`  ${C.c(id.padEnd(12))} ${key ? C.g('key present') : C.y('no key')}`);
+    if (l.resets === 'utc-day' && l.perDay) {
+      const lo = Math.floor(l.perDay / PASS_COST.max);
+      const hi = Math.floor(l.perDay / PASS_COST.min);
+      console.log(`    budget      ${l.perDay} requests/day, resets on the UTC day`);
+      console.log(`    fits        ${lo === hi ? lo : `${lo}-${hi}`} full pass(es) per day` +
+        (lo === 0 ? C.y('  ← a broad pass may not finish') : ''));
+      if (lo === 0) {
+        advice.push(`${id}: too small for a broad sweep. Spend it on VERIFYING findings ` +
+          '(1-3 requests each) or on one narrow, high-stakes scope.');
+      }
+    } else if (l.resets === 'pool' && l.pool) {
+      const lo = Math.floor(l.pool / PASS_COST.max);
+      const hi = Math.floor(l.pool / PASS_COST.min);
+      console.log(`    budget      ~${l.pool} credits, a POOL that does not refill`);
+      console.log(`    fits        ~${lo}-${hi} full passes in total, then it is gone`);
+      advice.push(`${id}: the workhorse. Use it for broad discovery passes, but the ` +
+        'total is finite - plan the whole review, not the day.');
+    } else {
+      console.log(`    budget      ${C.dim('not published to this tool')}`);
+      advice.push(`${id}: limits unknown. Run one narrow pass first and watch for a ` +
+        'rate-limit error before committing a long one.');
+    }
+    if (l.perMinute) {
+      // Measured, not derived: three concurrent passes against a 40/min ceiling
+      // took a 429 mid-review while two ran to completion. An agentic pass
+      // bursts, so the arithmetic (requests/min ÷ pass rate) is optimistic.
+      const safe = l.perMinute >= 40 ? 2 : 1;
+      console.log(`    rate        ${l.perMinute}/min  ` +
+        C.dim(`→ keep concurrent passes to ${safe}; a pass BURSTS, so this ceiling binds first`));
+    }
+    if (l.note) console.log(C.dim(`    ${l.note.replace(/(.{68}\s)/g, '$1\n    ')}`));
+    console.log();
+  }
+
+  if (advice.length) {
+    console.log(C.y('  How to spend it\n'));
+    for (const a of advice) console.log(C.dim(`  - ${a.replace(/(.{70}\s)/g, '$1\n    ')}`));
+    console.log(C.dim(
+      '\n  General shape: broad DISCOVERY on the largest budget, adversarial\n' +
+      '  VERIFICATION on the scarcest one. Verification is a few requests per\n' +
+      '  finding and benefits most from a model of a different lineage, so a\n' +
+      '  small daily allowance is worth more there than as a third sweep.\n'));
+  }
 }
 
 // ------------------------------------------------------------------ models
@@ -701,6 +846,21 @@ function cmdRun(args) {
         `  Run: external-review runner-config --provider ${provider.id} --write`);
   }
 
+  // Pre-flight, because the documented failure is a run that dies at the cap
+  // having read a lot and reported nothing. Refusing would be wrong - the user
+  // may want a narrow pass, or may have bought credits since - but starting a
+  // doomed sweep without a word is worse.
+  const l = provider.limits || {};
+  if (l.resets === 'utc-day' && l.perDay && l.perDay < PASS_COST.typical) {
+    console.error(C.y(
+      `\n  BUDGET WARNING: ${provider.label} allows ${l.perDay} requests/day and a ` +
+      `whole-subsystem pass\n  typically costs ~${PASS_COST.typical} ` +
+      `(${PASS_COST.min}-${PASS_COST.max}). This run may stop partway with nothing reported.`));
+    console.error(C.dim(
+      '  Narrow the scope, verify existing findings instead, or use a provider with\n' +
+      '  more headroom. `external-review plan` shows what fits.\n'));
+  }
+
   const prompt = readFileSync(promptFile, 'utf8');
   info(`model   ${model}`);
   info(`scope   ${cwd}`);
@@ -722,6 +882,19 @@ function cmdRun(args) {
     const verdict = judgeRun(buf, prompt);
     if (code !== 0) {
       console.error(C.y(`\nrunner exited ${code}; partial output in ${out}`));
+      // "exited 1" is not actionable; "you were rate limited" is. This is the
+      // commonest way a pass dies, and it dies LATE - after the model has read
+      // most of the subsystem and before it has written anything.
+      if (/\b429\b|too many requests|rate.?limit/i.test(buf)) {
+        console.error(C.y(
+          `\n  RATE LIMITED by ${provider.label}` +
+          (l.perMinute ? ` (its published limit is ${l.perMinute}/min).` : '.')));
+        console.error(C.dim(
+          '  An agentic pass BURSTS - it reads many files in quick succession - so\n' +
+          '  the per-minute ceiling binds long before the daily one. Concurrency\n' +
+          '  multiplies it: running N passes against one provider means N bursts.\n' +
+          '  Reduce concurrency, or split the passes across providers.\n'));
+      }
       process.exit(code);
     }
     if (verdict.ok) {
@@ -928,6 +1101,7 @@ ${C.b('Commands')}
   install-skill [--global]   put the skill where your assistant will find it
   doctor                     check your setup and say what is missing
   quota                      spend so far, credit limit, and the free-tier cap
+  plan [--provider ID]       how many passes actually fit, and where to spend them
   models [--free] [--all]    candidate models, ranked by context window
          [--min-context N] [--limit N]
   providers <model-id>       who actually serves that model, and from where
@@ -964,6 +1138,7 @@ const run = {
   doctor: cmdDoctor, quota: cmdQuota, models: cmdModels,
   providers: cmdProviders, scan: cmdScan, sync: cmdSync, run: cmdRun,
   'runner-config': cmdRunnerConfig, 'install-skill': cmdInstallSkill,
+  plan: cmdPlan,
 }[cmd];
 
 if (!run) { console.log(HELP); process.exit(cmd ? 1 : 0); }

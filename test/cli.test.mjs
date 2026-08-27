@@ -2,8 +2,8 @@
 // and its secret-exclusion list are worth pinning.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -349,4 +349,77 @@ test('a substantial answer to a long prompt is accepted', () => {
     '--model', 'x', '--in', dir, '--out', join(dir, 'o.md')],
     { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}` } });
   assert.equal(typeof out, 'string', 'a real review must not trip the guard');
+});
+
+// --------------------------------------------------- limits and expandability
+
+test('plan reports a range, never one comforting number', () => {
+  const out = run(['plan']);
+  assert.match(out, /openrouter/);
+  assert.match(out, /nvidia/);
+  assert.match(out, /POOL that does not refill/,
+    'pool-vs-daily-reset is the distinction that decides how to spend a budget');
+  assert.match(out, /may not finish/,
+    'a budget too small for a broad pass must say so, not be left to arithmetic');
+});
+
+test('run warns before starting a pass the daily budget cannot hold', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-budget-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake, `#!/bin/sh\nhead -c 3000 < /dev/zero | tr '\\\\0' 'a'\nexit 0\n`);
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this subsystem'.repeat(60));
+  // spawnSync, not the run() helper: the warning goes to STDERR and the helper
+  // only surfaces stderr when the command fails. This one succeeds.
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md')],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  assert.match(r.stderr, /BUDGET WARNING/,
+    'starting a doomed sweep silently is the failure this whole tool exists to avoid');
+  assert.equal(r.status, 0, 'a warning must not become a refusal - a narrow pass is legitimate');
+});
+
+test('a provider can be added without editing the source', () => {
+  const home = mkdtempSync(join(tmpdir(), 'er-prov-'));
+  mkdirSync(join(home, '.config/external-review'), { recursive: true });
+  writeFileSync(join(home, '.config/external-review/providers.json'),
+    JSON.stringify({ acme: { base: 'https://api.acme.test/v1', env: ['ACME_KEY'] } }));
+  const out = run(['plan'], { HOME: home });
+  assert.match(out, /acme/, 'a user-defined provider must appear everywhere a built-in does');
+  assert.match(out, /not published to this tool/,
+    'an unknown provider must claim NOTHING about its limits');
+});
+
+test('a broken providers file stops the run instead of silently ignoring it', () => {
+  const home = mkdtempSync(join(tmpdir(), 'er-prov-bad-'));
+  mkdirSync(join(home, '.config/external-review'), { recursive: true });
+  writeFileSync(join(home, '.config/external-review/providers.json'), '{ not json');
+  const out = run(['plan'], { HOME: home });
+  assert.match(out, /not valid JSON/,
+    'falling back to the built-ins would run against a DIFFERENT endpoint than configured');
+});
+
+test('a rate-limited run says so instead of just "exited 1"', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-429-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake,
+    '#!/bin/sh\necho \'Error: Too Many Requests: {"status":429}\'\nexit 1\n');
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this'.repeat(60));
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md')],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  assert.match(r.stderr, /RATE LIMITED/);
+  assert.match(r.stderr, /Concurrency/,
+    'the cause is usually parallel passes against one provider, and that is the fix');
+  assert.notEqual(r.status, 0);
+});
+
+test('plan gives a concurrency ceiling, not just a rate', () => {
+  assert.match(run(['plan']), /keep concurrent passes to/,
+    'a per-minute number alone leaves the user to guess how many passes is safe');
 });

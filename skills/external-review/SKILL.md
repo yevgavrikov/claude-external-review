@@ -36,8 +36,57 @@ documented intentions.
 
 ```bash
 external-review doctor     # is a key present, is a runner installed
-external-review quota      # what a long run will cost, and what will stop it
+external-review plan       # how many passes fit, across every provider you have
 ```
+
+**Run `plan` before choosing scopes, not after.** It reads each provider's
+published limits and reports how many whole-subsystem passes actually fit. The
+failure it prevents is specific and has happened: a broad pass dies at the daily
+cap having READ a lot and REPORTED nothing, and the reason appears only in
+stderr. A budget known afterwards is worthless.
+
+Two shapes of limit, and they call for opposite tactics:
+
+| | example | how to spend it |
+|---|---|---|
+| **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
+| **finite pool** | NVIDIA: ~1,000 credits, never refills | the workhorse for discovery — but plan the WHOLE review, not the day |
+
+So the default allocation with both configured: **broad discovery on the
+largest budget, adversarial verification on the scarcest one.** Verification
+benefits most from a different lineage anyway, so a small daily allowance is
+worth more there than as a third sweep. `run` warns before it starts a pass the
+daily budget cannot hold; it does not refuse, because a narrow pass is
+legitimate.
+
+A pass is ~40-150 requests — a measured range from real reviews. Report the
+range, never a single comforting number.
+
+**The per-minute ceiling binds before the daily one, and concurrency multiplies
+it.** An agentic pass BURSTS: it reads many files in quick succession, so the
+average rate is nothing like the peak. Running three passes at once against a
+40/min provider took a 429 mid-review — after the model had read most of the
+subsystem and before it had written anything — while two ran to completion. So:
+**two concurrent passes per provider, and split further work across providers
+rather than stacking it on one.** `plan` prints the ceiling; `run` names rate
+limiting explicitly when it happens, because "exited 1" is not actionable.
+
+### Adding a provider
+
+Any OpenAI-compatible endpoint works without forking anything — drop it in
+`~/.config/external-review/providers.json`:
+
+```json
+{ "groq": { "base": "https://api.groq.com/openai/v1", "env": ["GROQ_API_KEY"] } }
+```
+
+It then appears in every command. **Its capabilities default to "publishes
+nothing"**: `quota` says it cannot answer, `plan` says its limits are unknown,
+`models` says it cannot rank by context. That is deliberate — assuming a new
+endpoint speaks OpenRouter's metadata dialect would print an empty table that
+reads like a clean bill of health, which is the failure this tool exists to
+avoid. Opt in per capability once you have checked, and add `limits` once you
+know them.
 
 Both take `--provider`. A provider the runner does not ship with needs one more
 step — `external-review runner-config --provider nvidia --write` merges the

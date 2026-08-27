@@ -261,6 +261,38 @@ Adding another OpenAI-compatible endpoint is a few lines in `PROVIDERS` — the
 commands adapt from a `caps` table, and one that cannot answer a question says
 so rather than printing an empty result that reads like a clean bill of health.
 
+### 3c. Know what fits before you scope the work
+
+```bash
+external-review plan
+```
+
+```
+  openrouter   key present
+    budget      50 requests/day, resets on the UTC day
+    fits        0-1 full pass(es) per day  ← a broad pass may not finish
+  nvidia       key present
+    budget      ~1000 credits, a POOL that does not refill
+    fits        ~6-25 full passes in total, then it is gone
+
+  How to spend it
+  - openrouter: too small for a broad sweep. Spend it on VERIFYING findings…
+  - nvidia: the workhorse… plan the whole review, not the day.
+```
+
+Daily caps and finite pools call for opposite tactics, so the tool says which
+one you have rather than printing a number and leaving you the arithmetic.
+`run` warns before starting a pass the daily budget cannot hold.
+
+**Adding your own provider** takes no fork — `~/.config/external-review/providers.json`:
+
+```json
+{ "groq": { "base": "https://api.groq.com/openai/v1", "env": ["GROQ_API_KEY"] } }
+```
+
+Its capabilities default to *publishes nothing*, so it never claims limits or
+metadata it does not have.
+
 ### 4. Run a pass
 
 ```bash
@@ -323,6 +355,7 @@ codebases.
 | `doctor` | check the setup, say what is missing |
 | `quota` | spend so far, credit limit, free-tier cap |
 | `models [--free] [--all] [--min-context N] [--limit N]` | candidates by context window |
+| `plan [--provider ID]` | how many passes fit per provider, and where to spend them |
 | `providers <model-id>` | who serves it, HQ, datacenters, policy links |
 | `runner-config [--write] [--models a,b]` | teach your runner a provider it does not ship with |
 | `scan [--in DIR]` | find credentials **inside** source files, which no filename exclusion catches |
