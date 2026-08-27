@@ -253,6 +253,12 @@ fails.** Four ways that check silently lies, all of them observed:
 
 Two more, about the test itself:
 
+- **A comparison needs something to compare.** Not `assert A == B`, but
+  `assert A is non-trivial` and THEN `assert A == B`. Three tests in one day
+  passed by comparing two empty records, the same number twice, and no alarms to
+  no alarms. Watch for a sanitiser between your fixture and your assertion: it
+  turns a malformed fixture into an empty subject, and empty subjects agree
+  forever. PLAYBOOK 4b.
 - **Assert the thing is INTACT, not merely present.** A record that survives
   decode as a husk passes `hasLength(1)`. Where an autosave can make a loss
   permanent, drive decode → encode → decode.

@@ -181,6 +181,46 @@ construction.
 
 ---
 
+## 4b. A comparison needs something to compare
+
+The single most repeated failure across two codebases in one day. Three
+instances, all green, all worthless:
+
+- A backend test compared a stored record before and after a re-upload to prove
+  a write was skipped. The fixture's reminder had the wrong shape, the server's
+  sanitiser silently dropped it, and the test compared **two empty records**.
+- A widget test measured a hero's rendered size at two text scales to prove a
+  shrink guard engaged. The guard only engages on overflow, which did not
+  happen — so it measured **the same number twice**.
+- A device-pass step compared scheduled alarms before and after a change. On a
+  fresh install there were **no alarms either way**.
+
+The common form: *the subject of the check is empty or absent, so both branches
+agree.* Nothing about the assertion looks wrong. It reads as rigorous, it is
+specific, it names real values — and it cannot fail.
+
+**The rule, stated so it can be followed:**
+
+> Not `assert A == B`. First `assert A is non-trivial`, THEN `assert A == B`.
+
+In practice that means one extra line before every comparison:
+
+    expect(before['note'], isNotNull,
+        reason: 'fixture must populate note, or this test cannot see it dropped');
+    expect(stored.reminders, hasLength(1),
+        reason: 'the fixture must survive sanitisation, or these compare two '
+                'empty records');
+
+This is cheaper than the revert check and catches a different thing. The revert
+check asks "does my assertion respond to the fix?" — this asks "is there
+anything here to assert about?" A test can pass the first and fail the second:
+revert the fix, the empty-vs-empty comparison still changes nothing, and both
+runs agree that nothing happened.
+
+Watch especially for a **sanitiser between the fixture and the assertion**. Any
+validation layer that silently drops malformed input will turn a wrong fixture
+into an empty subject, and empty subjects compare equal to each other forever.
+
 ## 5b. A confirmed precondition is not a confirmed failure
 
 The single most expensive mistake of a full day's reviewing, made independently
