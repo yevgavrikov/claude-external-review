@@ -490,6 +490,21 @@ const SECRET_PATTERNS = [
   ['connection string with password', /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s:@/]+@[^\s/]+/],
 ];
 
+/* Hosts that CANNOT be real, so a credential pointing at one cannot be real.
+ *
+ * RFC 2606 and RFC 6761 reserve these precisely so documentation can show a
+ * full URL without it resolving anywhere. Found by running the scanner over a
+ * repo whose test file contains the comment "https://mailto:x@example.com" —
+ * structurally a connection string with a password, semantically a note about
+ * a URL-parsing bug.
+ *
+ * This is a narrowing with no false-negative cost: a live credential is never
+ * reachable at example.com. Everything else still trips the rule, including
+ * an internal hostname, because "we think that host is private" is exactly the
+ * assumption that leaks.
+ */
+const UNREACHABLE_HOSTS = /(?:^|[@.\/])(?:example\.(?:com|net|org)|test|invalid|localhost)(?![a-z0-9-])/i;
+
 const SCAN_SKIP_DIRS = new Set([
   '.git', 'node_modules', 'build', 'dist', 'target', '.venv', 'venv',
   '__pycache__', '.dart_tool', '.gradle', 'Pods', 'vendor', '.next',
@@ -551,10 +566,12 @@ function scanTree(root) {
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
         for (const [label, re] of SECRET_PATTERNS) {
-          if (re.test(lines[i])) {
-            hits.push({ file: rel, line: i + 1, label });
-            break;
-          }
+          const m = re.exec(lines[i]);
+          if (!m) continue;
+          // A credential aimed at a reserved host is documentation, not a leak.
+          if (UNREACHABLE_HOSTS.test(m[0])) continue;
+          hits.push({ file: rel, line: i + 1, label });
+          break;
         }
       }
     }
@@ -762,7 +779,8 @@ function cmdRunnerConfig(args) {
     console.log(JSON.stringify(block, null, 2));
     console.log(C.dim(
       `\n  Add it to ./opencode.json (this project) or ~/.config/opencode/opencode.json\n` +
-      '  (everywhere), or re-run with --write to merge it into ./opencode.json.\n' +
+      '  (everywhere), or re-run with --write (this project) or --write --global\n' +
+      '  (everywhere) to merge it for you.\n' +
       `  Then export ${provider.env[0]} and restart the runner — it does not\n` +
       '  pick up provider changes while running.\n' +
       '  Model ids must match the catalog EXACTLY; add them with\n' +
@@ -770,7 +788,12 @@ function cmdRunnerConfig(args) {
     return;
   }
 
-  const target = join(process.cwd(), 'opencode.json');
+  // --global mirrors install-skill: a provider you configured once should not
+  // have to be re-declared in every repo you review.
+  const target = args.includes('--global')
+    ? join(homedir(), '.config/opencode/opencode.json')
+    : join(process.cwd(), 'opencode.json');
+  mkdirSync(dirname(target), { recursive: true });
   let current = {};
   if (existsSync(target)) {
     try { current = JSON.parse(readFileSync(target, 'utf8')); }
@@ -842,7 +865,7 @@ ${C.b('Commands')}
          [--min-context N] [--limit N]
   providers <model-id>       who actually serves that model, and from where
   runner-config [--write]    teach your runner a non-native provider
-                [--models a,b]
+                [--global] [--models a,b]
   scan [--in DIR]            find credentials INSIDE source files, which no
                              filename exclusion can catch
   sync --to HOST:DIR         copy your source to a review machine, secrets

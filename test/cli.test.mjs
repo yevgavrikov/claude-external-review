@@ -272,3 +272,21 @@ test('a model id keeps working with or without the runner prefix', () => {
     assert.match(out, /no such prompt file/, 'both spellings must get past model parsing');
   }
 });
+
+test('runner-config --global targets the user config, not the repo', () => {
+  // The repo-local default is wrong for a provider you configured once and want
+  // in every review. Same shape as install-skill --global, deliberately.
+  const out = run(['runner-config', '--provider', 'nvidia']);
+  assert.match(out, /--write --global/, 'the no-write output must mention the global route');
+});
+
+test('a credential pointing at a reserved host is documentation, not a leak', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
+  // Left half: RFC 2606 reserved, cannot resolve, so cannot be a live secret.
+  // Right half: the same shape at a real host, which must still trip.
+  writeFileSync(join(dir, 'a.txt'), '// see https://user:pw@example.com/x\n');
+  writeFileSync(join(dir, 'b.txt'), 'const u = "postgres://admin:hunter2@db.acme.io/prod";\n');
+  const out = run(['scan', '--in', dir]);
+  assert.doesNotMatch(out, /a\.txt/, 'example.com is reserved precisely so docs can show a full URL');
+  assert.match(out, /b\.txt/, 'narrowing must not cost a real detection');
+});
