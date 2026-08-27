@@ -237,7 +237,7 @@ external-review run --provider nvidia --model moonshotai/kimi-k2 \
 | | `openrouter` (default) | `nvidia` — [build.nvidia.com](https://build.nvidia.com) |
 |---|---|---|
 | shape | router in front of many operators | NVIDIA's own catalog, one operator |
-| free budget | 50 req/day, **resets daily** | ~1,000 credits, a **pool that does not refill** |
+| free budget | 50 req/day, **resets daily** | **unlimited** — no credit cap, no daily cap |
 | rate limit | 20/min | 40/min, 200 on request |
 | discloses who serves it | yes | it is always NVIDIA |
 | the catch | free endpoints require opting into training + publishing | its terms **forbid** confidential data and production use |
@@ -272,12 +272,12 @@ external-review plan
     budget      50 requests/day, resets on the UTC day
     fits        0-1 full pass(es) per day  ← a broad pass may not finish
   nvidia       key present
-    budget      ~1000 credits, a POOL that does not refill
-    fits        ~6-25 full passes in total, then it is gone
+    budget      unlimited requests - no credit cap, no daily cap
+    fits        as many passes as you like, ONE AT A TIME
 
   How to spend it
   - openrouter: too small for a broad sweep. Spend it on VERIFYING findings…
-  - nvidia: the workhorse… plan the whole review, not the day.
+  - nvidia: unlimited, so the constraint is pacing rather than rationing…
 ```
 
 Daily caps and finite pools call for opposite tactics, so the tool says which

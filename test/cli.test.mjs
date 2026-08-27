@@ -247,8 +247,10 @@ test('runner-config says OpenRouter needs no config rather than writing a redund
 test('quota for a provider with no quota endpoint refuses to imply a clean bill', () => {
   const out = run(['quota', '--provider', 'nvidia']);
   assert.match(out, /no quota API/);
-  assert.match(out, /POOL, not a daily allowance/,
-    'the pool-vs-daily-reset difference is the one that ruins a review plan');
+  assert.match(out, /RATE, not budget/,
+    'what actually stops a run is the constraint worth naming');
+  assert.doesNotMatch(out, /1,000 credits/,
+    'NVIDIA removed the credit cap; quoting it repeats a stale blog post');
   assert.doesNotMatch(out, /spent today/,
     'printing zeroes would read as "you have spent nothing", a claim it cannot make');
 });
@@ -357,8 +359,8 @@ test('plan reports a range, never one comforting number', () => {
   const out = run(['plan']);
   assert.match(out, /openrouter/);
   assert.match(out, /nvidia/);
-  assert.match(out, /POOL that does not refill/,
-    'pool-vs-daily-reset is the distinction that decides how to spend a budget');
+  assert.match(out, /unlimited requests/,
+    'an unlimited-but-rate-capped provider needs pacing advice, not rationing');
   assert.match(out, /may not finish/,
     'a budget too small for a broad pass must say so, not be left to arithmetic');
 });

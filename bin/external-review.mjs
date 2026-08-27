@@ -57,11 +57,19 @@ const PROVIDERS = {
     // An OpenAI-compatible /models listing and nothing else: no pricing, no
     // context length, no per-endpoint metadata, no spend endpoint.
     caps: { spend: false, pricing: false, contextLength: false, endpoints: false },
+    // CORRECTED after a user checked their own account and could not find the
+    // credit balance this tool was quoting. NVIDIA removed the credit cap; the
+    // free tier is now unlimited requests governed by rate alone. The old
+    // "1,000 credits" figure is still all over the web and was wrong to assert
+    // from a secondary source - a number nobody can verify in their own console
+    // is exactly the kind of claim this tool exists to stop making.
     limits: {
-      perDay: null, perMinute: 40, resets: 'pool', pool: 1000,
-      note: 'Credits are a POOL that does not refill overnight. When they are '
-          + 'gone you request more in the developer forums or you stop, so the '
-          + 'unit to plan in is the whole review, not the day.',
+      perDay: null, perMinute: 40, resets: 'rate-only',
+      note: 'No credit cap and no daily cap: the free tier is unlimited '
+          + 'requests, capped by RATE. 40/min applies per model AND at the '
+          + 'account level, so switching model does not buy a fresh window. '
+          + 'Increases to 200/min are granted on request in the developer '
+          + 'forums. Plan for PACING, not for rationing.',
     },
   },
 };
@@ -307,16 +315,19 @@ function quotaWithoutAnEndpoint(provider) {
     '  https://build.nvidia.com → your account → API credits.\n'));
   console.log(C.y('  What the free tier is'));
   console.log(C.dim(
-    '  credits        ~1,000 on joining the free NVIDIA Developer Program, no\n' +
-    '                 card required. Roughly one credit per API call, so a\n' +
-    '                 whole-subsystem review (40-150 requests) is a visible\n' +
-    '                 fraction of the whole allowance.\n' +
-    '  rate           40 requests/minute; increases to 200 RPM are granted on\n' +
-    '                 request in the developer forums.\n' +
-    '  refill         credits are a POOL, not a daily allowance. Unlike\n' +
-    '                 OpenRouter\'s free tier they do NOT reset overnight - when\n' +
-    '                 they are gone you request more or you stop. Plan the whole\n' +
-    '                 review, not the day.\n'));
+    '  cost           free, permanent key on signup, no card. NVIDIA REMOVED\n' +
+    '                 the old credit cap (widely quoted as 1,000) - there is no\n' +
+    '                 credit balance in the console any more, and a tool that\n' +
+    '                 still quotes one is repeating a stale blog post.\n' +
+    '  requests       unlimited. There is no daily cap either.\n' +
+    '  rate           40 requests/minute - per model AND account-wide, so\n' +
+    '                 switching model does not buy a fresh window. Increases to\n' +
+    '                 200/min are granted on request in the developer forums.\n' +
+    '  what stops you RATE, not budget. An agentic pass bursts well past 40/min\n' +
+    '                 and dies mid-review having read everything and written\n' +
+    '                 nothing. Run ONE pass at a time and re-run a killed one -\n' +
+    '                 re-running costs nothing here, which is the whole\n' +
+    '                 difference from a daily-capped provider.\n'));
   console.log(C.y('  Two terms that matter more than the credits'));
   console.log(C.dim(
     '  Read `external-review providers <model>` before your first pass. The\n' +
@@ -360,13 +371,12 @@ function cmdPlan(args) {
         advice.push(`${id}: too small for a broad sweep. Spend it on VERIFYING findings ` +
           '(1-3 requests each) or on one narrow, high-stakes scope.');
       }
-    } else if (l.resets === 'pool' && l.pool) {
-      const lo = Math.floor(l.pool / PASS_COST.max);
-      const hi = Math.floor(l.pool / PASS_COST.min);
-      console.log(`    budget      ~${l.pool} credits, a POOL that does not refill`);
-      console.log(`    fits        ~${lo}-${hi} full passes in total, then it is gone`);
-      advice.push(`${id}: the workhorse. Use it for broad discovery passes, but the ` +
-        'total is finite - plan the whole review, not the day.');
+    } else if (l.resets === 'rate-only') {
+      console.log(`    budget      ${C.g('unlimited requests')} - no credit cap, no daily cap`);
+      console.log(`    fits        as many passes as you like, ONE AT A TIME`);
+      advice.push(`${id}: unlimited, so the constraint is pacing rather than ` +
+        'rationing. A pass dies on the per-minute ceiling, not on a budget - ' +
+        'run them sequentially and re-run a killed one rather than counting them.');
     } else {
       console.log(`    budget      ${C.dim('not published to this tool')}`);
       advice.push(`${id}: limits unknown. Run one narrow pass first and watch for a ` +

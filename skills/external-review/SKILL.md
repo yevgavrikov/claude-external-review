@@ -50,7 +50,13 @@ Two shapes of limit, and they call for opposite tactics:
 | | example | how to spend it |
 |---|---|---|
 | **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
-| **finite pool** | NVIDIA: ~1,000 credits, never refills | the workhorse for discovery — but plan the WHOLE review, not the day |
+| **rate-capped, unlimited** | NVIDIA: 40 req/min, no credit or daily cap | the workhorse. Pace it, don't ration it — re-running a killed pass costs nothing |
+
+A number in a blog post is not a limit. This table said NVIDIA gave ~1,000
+credits until a user checked their own console and could not find a balance
+anywhere — NVIDIA had removed the credit cap, and the figure survived only
+because it is repeated everywhere. **Check `plan` against the provider's own
+console before you trust a budget**, including this one.
 
 So the default allocation with both configured: **broad discovery on the
 largest budget, adversarial verification on the scarcest one.** Verification
