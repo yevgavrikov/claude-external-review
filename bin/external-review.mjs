@@ -907,6 +907,27 @@ function cmdRun(args) {
       // "exited 1" is not actionable; "you were rate limited" is. This is the
       // commonest way a pass dies, and it dies LATE - after the model has read
       // most of the subsystem and before it has written anything.
+      // A 5xx is transient in the same way a 429 is - the pass is worth
+      // repeating, and on a rate-capped provider repeating costs nothing. Kept
+      // separate from the rate-limit branch because the ADVICE differs: there
+      // is no window to wait out, so a short pause and a different model are
+      // the useful suggestions.
+      if (/\b5\d\d\b.*(server error|unexpected)|unexpected server error/i.test(buf)) {
+        console.error(C.y(
+          `\n  ${provider.label} returned a SERVER ERROR, not a refusal.`));
+        console.error(C.dim(
+          '  Transient upstream failure: the model or its host fell over\n' +
+          '  mid-pass. Nothing about your prompt or budget caused it.\n' +
+          '  Re-run, and try a different model if it repeats - a single model\n' +
+          '  can be unhealthy while the rest of the catalog is fine.\n'));
+        console.error('RETRY_AFTER_SECONDS=60');
+        if (retriesLeft > 0) {
+          console.error(C.y(`  --retry: re-attempting in 60s (${retriesLeft} left)…\n`));
+          setTimeout(() => attempt(retriesLeft - 1), 60_000);
+          return;
+        }
+        process.exit(3);
+      }
       if (/\b429\b|too many requests|rate.?limit/i.test(buf)) {
         const wait = rateLimitWaitSeconds(provider);
         console.error(C.y(

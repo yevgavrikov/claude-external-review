@@ -580,3 +580,28 @@ test('a daily-capped provider is told to wait for the reset, not for minutes', (
     'send the caller straight back into the same wall');
   assert.ok(secs <= 86400);
 });
+
+test('a 5xx is reported as transient, not as a rate limit or a bad prompt', () => {
+  // Seen for real: a pass died on "Unexpected server error" and --retry did not
+  // fire, because the only retryable branch matched rate limits. The advice
+  // differs - there is no window to wait out - so it needs its own branch
+  // rather than a widened regex on the rate-limit one.
+  const dir = mkdtempSync(join(tmpdir(), 'er-5xx-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake,
+    '#!/bin/sh\necho \'{"error":{"status":500,"message":"Unexpected server error."}}\'\nexit 1\n');
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this'.repeat(60));
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md')],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  assert.equal(r.status, 3, 'transient upstream failure is retryable');
+  assert.match(r.stderr, /SERVER ERROR/);
+  assert.match(r.stderr, /different model/,
+    'one model can be unhealthy while the catalog is fine - that is the action');
+  assert.doesNotMatch(r.stderr, /RATE LIMITED/,
+    'calling a 500 a rate limit would send the caller to wait out a window that '
+    + 'does not exist');
+});
