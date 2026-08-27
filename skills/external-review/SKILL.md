@@ -294,6 +294,12 @@ spend its whole context exploring, stop before writing a single finding, and exi
 identified a real bug mid-thought. `run` fails the command when the output lacks
 the sections your prompt demanded, and keeps the output for exactly this reason.
 
+**A hung runner looks exactly like a busy one.** Give every background pass
+`< /dev/null` — an interactive tool that decides to read stdin will block
+forever and still look like a large review in progress. Check `ps -o %cpu`: a
+working pass burns CPU in bursts, a flat 0.0% is a hang. One cost 37 minutes.
+PLAYBOOK 4c.
+
 **Do not edit the tree while a pass reads it.** A forty-minute review over a
 subsystem you are also fixing will read half the old code and half the new, and
 spend its budget arguing with itself about what a file contains rather than

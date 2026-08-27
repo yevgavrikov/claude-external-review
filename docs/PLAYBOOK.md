@@ -221,6 +221,38 @@ Watch especially for a **sanitiser between the fixture and the assertion**. Any
 validation layer that silently drops malformed input will turn a wrong fixture
 into an empty subject, and empty subjects compare equal to each other forever.
 
+## 4c. A hung reviewer looks exactly like a slow one
+
+A pass ran for 37 minutes and produced nothing. It was never running.
+
+`codex exec "$(cat prompt.txt)"` in the background, with no stdin redirect. The
+runner decided it also wanted stdin, printed one line to stderr —
+
+    Reading additional input from stdin...
+
+— and blocked forever. From the outside it was indistinguishable from a large
+review in progress: a live process, an output file, no error. The tell was in
+`ps`: **0.0% CPU**, for the whole 37 minutes.
+
+Always give a background runner `< /dev/null`. Any interactive tool may decide
+to read stdin, and inheriting an open one that never closes is a silent hang.
+(`external-review run` spawns with `stdio: ['ignore', …]` for exactly this
+reason — it is the raw invocations that bite.)
+
+**How to tell the difference, in order of cost:**
+
+1. `ps -o etime,%cpu` — a working agentic pass burns CPU in bursts between API
+   calls. A flat 0.0% over minutes is not thinking, it is waiting.
+2. Read stderr. Runners narrate their file reads there; that stream is the
+   liveness signal, and an empty one after several minutes means nothing has
+   started.
+3. Only then consider that the scope might be large.
+
+The general form, and the reason this sits next to the vacuity sections: **a
+process that has not started and a process that is working produce the same
+observable — nothing yet.** Before concluding "it needs more time", confirm it
+is spending some.
+
 ## 5a. Never review a tree you are editing
 
 Obvious once stated, expensive when ignored, and easy to drift into when a
