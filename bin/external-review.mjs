@@ -706,16 +706,83 @@ function cmdRun(args) {
   info(`scope   ${cwd}`);
   info(`output  ${out}`);
 
-  const child = spawn(runner, ['run', '-m', model, prompt], {
+  // opencode resolves its OWN project root and ignores the spawn cwd. Getting
+  // this wrong is not a crash: it treats the tree you meant to review as an
+  // "external directory", auto-rejects every read in non-interactive mode, and
+  // the model writes a paragraph about not being able to see anything. Pass the
+  // directory explicitly.
+  const dirFlag = /(^|\/)opencode$/.test(runner) ? ['--dir', cwd] : [];
+  const child = spawn(runner, ['run', ...dirFlag, '-m', model, prompt], {
     cwd, stdio: ['ignore', 'pipe', 'inherit'],
   });
   let buf = '';
   child.stdout.on('data', (d) => { buf += d; process.stdout.write(d); });
   child.on('close', (code) => {
     writeFileSync(out, buf);
-    console.error(code === 0 ? C.g(`\nwrote ${out}`) : C.y(`\nrunner exited ${code}; partial output in ${out}`));
-    process.exit(code ?? 0);
+    const verdict = judgeRun(buf, prompt);
+    if (code !== 0) {
+      console.error(C.y(`\nrunner exited ${code}; partial output in ${out}`));
+      process.exit(code);
+    }
+    if (verdict.ok) {
+      console.error(C.g(`\nwrote ${out}`));
+      process.exit(0);
+    }
+    // A review that read nothing must not look like a review that found
+    // nothing. This is the whole failure: exit 0, a file on disk, and a reader
+    // who concludes the subsystem is clean.
+    console.error(C.r(`\nTHIS RUN DID NOT REVIEW YOUR CODE. Output kept at ${out}`));
+    console.error(C.y(`  ${verdict.why}\n`));
+    for (const hint of verdict.hints) console.error(C.dim(`  ${hint}`));
+    console.error();
+    process.exit(2);
   });
+}
+
+/* Decide whether a run that exited 0 actually reviewed anything.
+ *
+ * Written after a pass exited 0 having had every single file read rejected: the
+ * runner resolved a different project root, refused the tree as an external
+ * directory, and produced 147 bytes of apology. The exit code was 0 and the
+ * output file existed, which is indistinguishable from a clean review unless
+ * somebody opens it.
+ *
+ * Two signals, both conservative - this warns, it does not silently rewrite the
+ * findings, and a genuinely short "this subsystem is sound" answer to a short
+ * prompt still passes.
+ */
+function judgeRun(output, prompt) {
+  const hints = [
+    'If the runner refused to read files: it resolved a different project root.',
+    'Check --in points at the tree you mean, and that your runner can read it.',
+    'Re-run with the runner directly to see its own errors.',
+  ];
+  const refusalMarkers = [
+    /permission requested/i,
+    /rejected permission/i,
+    /external_directory/i,
+    /rejected the permission/i,
+  ];
+  const refused = refusalMarkers.filter((re) => re.test(output));
+  if (refused.length) {
+    return {
+      ok: false,
+      why: 'The runner asked for permission to read your code and was refused, ' +
+           'so the model never saw the files.',
+      hints,
+    };
+  }
+  // A review is a long answer to a long question. Coming back with a small
+  // fraction of the prompt's own length means it did not engage with it.
+  if (output.replace(/\s+/g, ' ').trim().length < Math.min(400, prompt.length / 4)) {
+    return {
+      ok: false,
+      why: 'The runner produced almost no output - far less than the prompt it ' +
+           'was given, which is not what a review looks like.',
+      hints,
+    };
+  }
+  return { ok: true };
 }
 
 

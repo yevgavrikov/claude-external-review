@@ -290,3 +290,63 @@ test('a credential pointing at a reserved host is documentation, not a leak', ()
   assert.doesNotMatch(out, /a\.txt/, 'example.com is reserved precisely so docs can show a full URL');
   assert.match(out, /b\.txt/, 'narrowing must not cost a real detection');
 });
+
+// ------------------------------------------------- a run that reviewed nothing
+//
+// The bug these pin, found by using the tool: opencode resolves its own project
+// root and ignores the spawn cwd, so it treated the target tree as an external
+// directory, auto-rejected every file read, and produced a short apology. It
+// exited 0 and wrote an output file — indistinguishable from a clean review
+// unless a human opens it. That is the same shape as a vacuous test.
+
+test('the runner is told which directory to work in, not just spawned there', () => {
+  assert.match(src, /--dir/,
+    'opencode ignores the spawn cwd; without --dir it reviews the wrong tree or none');
+  assert.match(src, /opencode\$\/\.test\(runner\)/,
+    'the flag belongs to opencode specifically, not to every runner');
+});
+
+test('a run whose reads were all refused does not exit 0', () => {
+  // Stand in a fake runner that reproduces the exact failure: exit 0, having
+  // been refused, with a short apologetic answer.
+  const dir = mkdtempSync(join(tmpdir(), 'er-run-'));
+  // HOME is overridden so findRunner cannot reach the developer's real
+  // opencode and quietly run THAT instead of this fixture.
+  const fake = join(dir, 'opencode');
+  // The output is deliberately LONG. A short one would trip the
+  // not-enough-output rule instead, and the test would pass while the refusal
+  // detection was broken — which is exactly what happened the first time this
+  // was written, and was only caught by reverting the detection and finding the
+  // test still green.
+  writeFileSync(fake,
+    '#!/bin/sh\necho "permission requested: external_directory (/x/*); auto-rejecting"\n' +
+    "head -c 4000 < /dev/zero | tr '\\0' 'a'\necho\nexit 0\n");
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this subsystem'.repeat(60));
+
+  let code = 0; let stderr = '';
+  try {
+    execFileSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'),
+      '--model', 'x', '--in', dir, '--out', join(dir, 'o.md')],
+      { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}` } });
+  } catch (e) { code = e.status; stderr = e.stderr ?? ''; }
+
+  assert.notEqual(code, 0, 'exiting 0 here is what made the failure invisible');
+  assert.match(stderr, /DID NOT REVIEW YOUR CODE/);
+  assert.equal(readFileSync(join(dir, 'o.md'), 'utf8').length > 0, true,
+    'the output is still kept — you need it to see what went wrong');
+});
+
+test('a substantial answer to a long prompt is accepted', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-run-ok-'));
+  // HOME is overridden so findRunner cannot reach the developer's real
+  // opencode and quietly run THAT instead of this fixture.
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake, `#!/bin/sh\nhead -c 3000 < /dev/zero | tr '\\\\0' 'a'\nexit 0\n`);
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this subsystem'.repeat(60));
+  const out = execFileSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'),
+    '--model', 'x', '--in', dir, '--out', join(dir, 'o.md')],
+    { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}` } });
+  assert.equal(typeof out, 'string', 'a real review must not trip the guard');
+});
