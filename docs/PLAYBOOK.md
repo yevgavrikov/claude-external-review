@@ -239,14 +239,34 @@ to read stdin, and inheriting an open one that never closes is a silent hang.
 (`external-review run` spawns with `stdio: ['ignore', …]` for exactly this
 reason — it is the raw invocations that bite.)
 
-**How to tell the difference, in order of cost:**
+**How to tell the difference — and get the signal right.**
 
-1. `ps -o etime,%cpu` — a working agentic pass burns CPU in bursts between API
-   calls. A flat 0.0% over minutes is not thinking, it is waiting.
-2. Read stderr. Runners narrate their file reads there; that stream is the
-   liveness signal, and an empty one after several minutes means nothing has
-   started.
-3. Only then consider that the scope might be large.
+The first version of this section said "a flat 0.0% CPU is a hang". That is
+WRONG, and it was disproved by the very next pass within the hour: a healthy
+codex run also samples at 0.0%, because an agentic pass spends nearly all its
+wall-clock blocked on the API, and `ps` reports an instantaneous sample. Both a
+hung process and a working one idle almost all the time.
+
+**The discriminator is whether stderr is GROWING**, not whether CPU is non-zero:
+
+    a=$(wc -c < err.log); sleep 25; b=$(wc -c < err.log)
+    echo "$((b-a)) bytes in 25s"
+
+A working pass narrates its file reads and searches to stderr continuously —
+the healthy run above added 519 bytes in 25 seconds while showing 0.0% CPU. The
+hung one had produced exactly one line, 37 minutes earlier, and never another.
+
+So, in order:
+
+1. **Is stderr growing?** Two measurements, 20-30s apart. This is the answer.
+2. **Is stdout still empty?** Expected — runners buffer the report until the end.
+   An empty output file proves nothing either way.
+3. Only then consider scope.
+
+Leaving the wrong version visible above rather than quietly replacing it,
+because the mistake is the lesson: I reached for the metric that felt rigorous
+(CPU) instead of the one that actually discriminates, one commit after writing a
+section about exactly that.
 
 The general form, and the reason this sits next to the vacuity sections: **a
 process that has not started and a process that is working produce the same

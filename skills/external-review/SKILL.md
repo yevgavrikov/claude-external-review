@@ -296,8 +296,10 @@ the sections your prompt demanded, and keeps the output for exactly this reason.
 
 **A hung runner looks exactly like a busy one.** Give every background pass
 `< /dev/null` — an interactive tool that decides to read stdin will block
-forever and still look like a large review in progress. Check `ps -o %cpu`: a
-working pass burns CPU in bursts, a flat 0.0% is a hang. One cost 37 minutes.
+forever and still look like a large review in progress. To tell a hang from a long
+run, measure whether STDERR IS GROWING (two `wc -c` a a few seconds apart) — not
+CPU, which reads 0.0% for a healthy pass too, since it is blocked on the API
+almost the whole time. One hang cost 37 minutes.
 PLAYBOOK 4c.
 
 **Do not edit the tree while a pass reads it.** A forty-minute review over a
