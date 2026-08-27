@@ -85,6 +85,45 @@ So the decision is simple to state, if not to make:
 | private but not contractually restricted | a paid endpoint whose terms you have read |
 | under NDA, customer contract, or a residency rule | ZDR, or a model you host yourself |
 
+## NVIDIA's catalog is a different kind of deal
+
+`--provider nvidia` reaches [build.nvidia.com](https://build.nvidia.com), where
+the constraint is contractual rather than a trade you opt into.
+
+**You agree not to send confidential data.** [API Trial Terms of
+Service](https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf)
+§2.6(a): you agree you will not "include any confidential information,
+controlled or sensitive data, including protected health information, personal
+data ... or data that was processed or collected in violation of law".
+
+Read that next to OpenRouter's free tier. There, sending private code is a risk
+you accept knowingly. Here it is a breach of the agreement you accepted to get
+the key. The practical rule is the same either way and the reasoning is not:
+**client code under NDA does not go to this endpoint at any price.**
+
+**Trial purposes, not production.** §1.2 grants access "for limited trial
+purposes only and without use of the API Service or Generated Content in
+production". Reviewing your own source is development and testing, so a review
+sits inside it. A key wired into CI that gates releases does not, and NVIDIA AI
+Enterprise is the licence for that.
+
+**What NVIDIA says it keeps.** §3.3 collects session metrics, error and
+execution logs, your feedback, "and (iv) User Content and Generated Content to
+improve NVIDIA products and services, including AI models", and use "will be
+logged for security, fraud or abuse monitoring and shared with third party
+service providers". §2.4 sets a 30-day store for User Content on the services
+that keep it, with security logging on top.
+
+Some NVIDIA marketing pages describe the catalog as stateless with no content
+logging. That is not what the Terms of Service say. **Where they disagree,
+believe the contract** — it is the document you accepted, and it is the one that
+would be read back to you.
+
+**On credits.** ~1,000 free credits, roughly one per call, 40 requests/minute.
+Unlike OpenRouter's daily free-model cap these do NOT reset overnight: it is a
+pool, and when it is gone you request more in the developer forums or you stop.
+Plan the whole review rather than the day.
+
 Do not let "it is only a code review" carry the decision. A review prompt
 contains more of your source, in one place, than almost anything else you send
 anywhere.

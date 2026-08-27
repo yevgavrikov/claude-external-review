@@ -222,6 +222,45 @@ per-key guardrail, or `"zdr": true` per request. It blocks storage and training
 — and removes most free endpoints, which is the same trade seen from the other
 side. [`docs/PRIVACY.md`](docs/PRIVACY.md) has the decision table.
 
+### 3b. Or use a different provider entirely
+
+Every command takes `--provider` (or `$EXTERNAL_REVIEW_PROVIDER`):
+
+```bash
+external-review models --provider nvidia
+external-review runner-config --provider nvidia --write   # opencode.json block
+export NVIDIA_API_KEY=nvapi-...
+external-review run --provider nvidia --model moonshotai/kimi-k2 \
+                    --prompt ./review.txt --out findings.md
+```
+
+| | `openrouter` (default) | `nvidia` — [build.nvidia.com](https://build.nvidia.com) |
+|---|---|---|
+| shape | router in front of many operators | NVIDIA's own catalog, one operator |
+| free budget | 50 req/day, **resets daily** | ~1,000 credits, a **pool that does not refill** |
+| rate limit | 20/min | 40/min, 200 on request |
+| discloses who serves it | yes | it is always NVIDIA |
+| the catch | free endpoints require opting into training + publishing | its terms **forbid** confidential data and production use |
+
+That last row is not a footnote. OpenRouter's free tier is a trade you accept —
+your code may be trained on. NVIDIA's [API Trial Terms of
+Service](https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf)
+§2.6(a) has you **agree not to submit** confidential or sensitive data, so
+sending NDA'd code there is a breach rather than a risk. §1.2 limits use to
+trial purposes "without use of the API Service or Generated Content in
+production" — reviewing your own source is inside that; release-gating CI is
+not.
+
+And the marketing and the contract disagree: some NVIDIA pages describe the
+catalog as stateless with no content logging, while §3.3 says User Content is
+collected "to improve NVIDIA products and services, including AI models".
+`external-review providers <id> --provider nvidia` prints both and tells you
+which one binds.
+
+Adding another OpenAI-compatible endpoint is a few lines in `PROVIDERS` — the
+commands adapt from a `caps` table, and one that cannot answer a question says
+so rather than printing an empty result that reads like a clean bill of health.
+
 ### 4. Run a pass
 
 ```bash
@@ -285,6 +324,7 @@ codebases.
 | `quota` | spend so far, credit limit, free-tier cap |
 | `models [--free] [--all] [--min-context N] [--limit N]` | candidates by context window |
 | `providers <model-id>` | who serves it, HQ, datacenters, policy links |
+| `runner-config [--write] [--models a,b]` | teach your runner a provider it does not ship with |
 | `scan [--in DIR]` | find credentials **inside** source files, which no filename exclusion catches |
 | `sync --to HOST:DIR [--from DIR] [--exclude PATH]` | scan, refuse if anything is found, copy excluding secrets, then verify |
 | `run --prompt FILE --model ID [--in DIR] [--out FILE]` | run a pass |

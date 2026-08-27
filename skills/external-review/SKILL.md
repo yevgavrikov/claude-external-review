@@ -2,7 +2,7 @@
 name: external-review
 description: "Review this codebase with a SECOND, independent model to find defects the primary model walked past. Use when the user asks to 'review the code deeper', 'find bugs we missed', 'use another model', 'get a second opinion', 'audit this subsystem', or wants coverage beyond what in-house review produced. Also use when choosing a review model, checking API quota before a long run, or deciding whether it is acceptable to send this code to a given provider."
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # External review — a second model, used properly
@@ -39,18 +39,51 @@ external-review doctor     # is a key present, is a runner installed
 external-review quota      # what a long run will cost, and what will stop it
 ```
 
+Both take `--provider`. A provider the runner does not ship with needs one more
+step — `external-review runner-config --provider nvidia --write` merges the
+block into `opencode.json` and references the key as `{env:...}` rather than
+writing it into a file that gets committed.
+
 The quota check is not bureaucracy. On a free tier, OpenRouter caps free-model
 requests per day (50, or 1000 once the account has ever bought 10 credits). A
 whole-subsystem review is 40–150 requests. Runs die **partway**, having read a
 lot and reported nothing, and the error only appears in stderr. Know your budget
 before you scope the passes, not after the third one dies.
 
-## Choosing a model
+## Choosing a provider, then a model
 
 ```bash
 external-review models --free          # ranked by context window
 external-review providers <model-id>   # who serves it, and from where
 ```
+
+Two providers, and the difference is not price:
+
+| | `openrouter` (default) | `nvidia` |
+|---|---|---|
+| what it is | a router in front of many operators | NVIDIA's own catalog, one operator |
+| free budget | 50 requests/day, **resets daily** | ~1,000 credits, a **pool that does not refill** |
+| rate | 20/min | 40/min |
+| tells you who serves it | yes | it is always NVIDIA |
+| the catch | free endpoints require opting into training and publishing | its terms **forbid** sending confidential data, and forbid production use |
+
+Add `--provider nvidia` to any command. The pool-versus-daily-reset difference
+is the one that ruins a plan: on OpenRouter a dead run costs you a day, on
+NVIDIA it costs you a slice of a finite allowance you have to ask a forum to
+top up.
+
+**The NVIDIA terms are a genuinely different kind of constraint and you must say
+so before the first pass.** OpenRouter's free tier is a trade the user accepts:
+the code may be trained on. NVIDIA's API Trial Terms of Service §2.6(a) has the
+user *agree not to submit* confidential or sensitive data at all — so sending
+client code under NDA is not a risk they are taking, it is a breach of the
+contract they accepted. §1.2 also limits use to trial purposes "without use of
+the API Service or Generated Content in production", which covers reviewing your
+own source but not wiring the key into release-gating CI. Note also that some
+NVIDIA marketing pages describe the catalog as stateless with no content
+logging, while §3.3 says User Content is collected "to improve NVIDIA products
+and services, including AI models". Where they disagree, the contract binds —
+`external-review providers <id> --provider nvidia` prints both.
 
 Rank by **context window first**. A model that cannot hold the subsystem cannot
 review it, and no amount of cleverness compensates. Then reasoning quality. Price

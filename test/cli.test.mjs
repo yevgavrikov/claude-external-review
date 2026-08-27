@@ -199,3 +199,76 @@ test('install-skill places the skill and refuses to clobber it', () => {
 test('help lists install-skill, since it is the first thing anyone runs', () => {
   assert.match(run([]), /install-skill/);
 });
+
+// ------------------------------------------------------------- providers
+//
+// A second provider is where this tool stops being a thin OpenRouter wrapper,
+// and every one of these pins something that would otherwise fail quietly: a
+// key inlined into a config file, a merge that eats somebody's working config,
+// or a command that prints an empty table where it should print "I cannot
+// answer that".
+
+test('an unknown provider names the ones that exist', () => {
+  const out = run(['quota', '--provider', 'nope']);
+  assert.match(out, /unknown provider "nope"/);
+  assert.match(out, /openrouter/);
+  assert.match(out, /nvidia/);
+});
+
+test('EXTERNAL_REVIEW_PROVIDER selects the provider without a flag', () => {
+  const out = run(['doctor'], { EXTERNAL_REVIEW_PROVIDER: 'nvidia', NVIDIA_API_KEY: '' });
+  assert.match(out, /NVIDIA API Catalog/);
+});
+
+test('the runner config references the key by env, never inlines it', () => {
+  const out = run(['runner-config', '--provider', 'nvidia'],
+    { NVIDIA_API_KEY: 'nvapi-SECRET-VALUE-DO-NOT-PRINT' });
+  assert.match(out, /\{env:NVIDIA_API_KEY\}/);
+  assert.doesNotMatch(out, /SECRET-VALUE/,
+    'a config file gets committed and pasted into issues; a key in it is a key disclosed');
+});
+
+test('runner-config --write merges instead of clobbering an existing config', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-cfg-'));
+  writeFileSync(join(dir, 'opencode.json'),
+    JSON.stringify({ theme: 'mine', provider: { other: { keep: true } } }));
+  execFileSync('node', [BIN, 'runner-config', '--provider', 'nvidia', '--write'],
+    { cwd: dir, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+  const after = JSON.parse(readFileSync(join(dir, 'opencode.json'), 'utf8'));
+  assert.equal(after.theme, 'mine', 'unrelated settings must survive');
+  assert.equal(after.provider.other.keep, true, 'other providers must survive');
+  assert.equal(after.provider.nvidia.options.apiKey, '{env:NVIDIA_API_KEY}');
+});
+
+test('runner-config says OpenRouter needs no config rather than writing a redundant block', () => {
+  assert.match(run(['runner-config']), /needs no runner config/);
+});
+
+test('quota for a provider with no quota endpoint refuses to imply a clean bill', () => {
+  const out = run(['quota', '--provider', 'nvidia']);
+  assert.match(out, /no quota API/);
+  assert.match(out, /POOL, not a daily allowance/,
+    'the pool-vs-daily-reset difference is the one that ruins a review plan');
+  assert.doesNotMatch(out, /spent today/,
+    'printing zeroes would read as "you have spent nothing", a claim it cannot make');
+});
+
+test('providers surfaces the two NVIDIA clauses that have no OpenRouter equivalent', () => {
+  const out = run(['providers', 'any/model', '--provider', 'nvidia']);
+  assert.match(out, /NOT TO SUBMIT CONFIDENTIAL DATA/);
+  assert.match(out, /TRIAL USE ONLY, NOT PRODUCTION/);
+  assert.match(out, /believe the contract/,
+    'the marketing pages and the ToS disagree; the tool must say which one binds');
+});
+
+test('a model id keeps working with or without the runner prefix', () => {
+  // Both spellings must reach the same place. The failure this prevents is a
+  // silent `nvidia/nvidia/...` that the runner rejects as an unknown model.
+  const withPrefix = run(['run', '--prompt', '/nonexistent', '--model', 'nvidia/x',
+    '--provider', 'nvidia']);
+  const without = run(['run', '--prompt', '/nonexistent', '--model', 'x',
+    '--provider', 'nvidia']);
+  for (const out of [withPrefix, without]) {
+    assert.match(out, /no such prompt file/, 'both spellings must get past model parsing');
+  }
+});

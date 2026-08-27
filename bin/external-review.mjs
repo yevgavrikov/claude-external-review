@@ -14,7 +14,51 @@ import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const OR = 'https://openrouter.ai/api/v1';
+/* ------------------------------------------------------------------ providers
+ *
+ * A review provider is: a base URL, a key, and an honest account of what it can
+ * and cannot tell you. The second half matters more than the first. OpenRouter
+ * publishes who serves a model, from where, and under which policy; NVIDIA's
+ * catalog publishes none of that because the answer is always "NVIDIA" - but it
+ * has terms that OpenRouter does not, and a tool that hides the difference is
+ * worse than no tool.
+ *
+ * `caps` is deliberately explicit rather than inferred. A command that cannot
+ * answer for a provider should SAY SO, not print an empty table that reads like
+ * a clean bill of health.
+ */
+const PROVIDERS = {
+  openrouter: {
+    label: 'OpenRouter',
+    base: 'https://openrouter.ai/api/v1',
+    env: ['OPENROUTER_API_KEY'],
+    authStoreKey: 'openrouter',
+    hint: 'set OPENROUTER_API_KEY, or run `opencode auth login`',
+    // Prefix the runner uses: opencode addresses it as openrouter/<model-id>.
+    runnerPrefix: 'openrouter/',
+    caps: { spend: true, pricing: true, contextLength: true, endpoints: true },
+  },
+  nvidia: {
+    label: 'NVIDIA API Catalog (build.nvidia.com)',
+    base: 'https://integrate.api.nvidia.com/v1',
+    env: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'],
+    authStoreKey: 'nvidia',
+    hint: 'set NVIDIA_API_KEY (get one at build.nvidia.com, no card needed)',
+    runnerPrefix: 'nvidia/',
+    // An OpenAI-compatible /models listing and nothing else: no pricing, no
+    // context length, no per-endpoint metadata, no spend endpoint.
+    caps: { spend: false, pricing: false, contextLength: false, endpoints: false },
+  },
+};
+
+function resolveProvider(args = []) {
+  const id = argValue(args, '--provider')
+    ?? process.env.EXTERNAL_REVIEW_PROVIDER
+    ?? 'openrouter';
+  const p = PROVIDERS[id];
+  if (!p) die(`unknown provider "${id}". Known: ${Object.keys(PROVIDERS).join(', ')}`);
+  return { id, ...p };
+}
 
 // ---------------------------------------------------------------- utilities
 
@@ -27,26 +71,29 @@ const C = process.stdout.isTTY
 const die = (msg) => { console.error(`${C.r('error')} ${msg}`); process.exit(1); };
 const info = (msg) => console.error(C.dim(msg));
 
-/** Read the OpenRouter key from the env or from opencode's auth store. */
-function apiKey({ required = true } = {}) {
-  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+/** Read a provider's key from the env, or from opencode's auth store. */
+function apiKey(provider, { required = true } = {}) {
+  for (const name of provider.env) if (process.env[name]) return process.env[name];
   const authFile = join(homedir(), '.local/share/opencode/auth.json');
   if (existsSync(authFile)) {
     try {
-      const key = JSON.parse(readFileSync(authFile, 'utf8'))?.openrouter?.key;
+      const key = JSON.parse(readFileSync(authFile, 'utf8'))?.[provider.authStoreKey]?.key;
       if (key) return key;
     } catch { /* fall through to the error below */ }
   }
   if (!required) return null;
-  die('no API key. Set OPENROUTER_API_KEY, or run `opencode auth login`.');
+  die(`no API key for ${provider.label}. ${provider.hint}.`);
 }
 
-async function api(path, { key = apiKey(), ...init } = {}) {
-  const res = await fetch(`${OR}${path}`, {
+async function api(provider, path, { key, ...init } = {}) {
+  const res = await fetch(`${provider.base}${path}`, {
     ...init,
-    headers: { Authorization: `Bearer ${key}`, ...(init.headers || {}) },
+    headers: {
+      Authorization: `Bearer ${key ?? apiKey(provider)}`,
+      ...(init.headers || {}),
+    },
   });
-  if (!res.ok) die(`OpenRouter ${path} → HTTP ${res.status}`);
+  if (!res.ok) die(`${provider.label} ${path} → HTTP ${res.status}`);
   return res.json();
 }
 
@@ -66,18 +113,19 @@ const isFree = (m) => num(m?.pricing?.prompt) === 0 && num(m?.pricing?.completio
 
 // ------------------------------------------------------------------ doctor
 
-async function cmdDoctor() {
+async function cmdDoctor(args = []) {
+  const provider = resolveProvider(args);
   let bad = 0;
   const check = (ok, label, detail) => {
     console.log(`${ok ? C.g('  ok  ') : C.y(' warn ')} ${label}${detail ? C.dim(`  ${detail}`) : ''}`);
     if (!ok) bad++;
   };
 
-  console.log(C.b('\nexternal-review doctor\n'));
+  console.log(C.b(`\nexternal-review doctor  ${C.dim(provider.label)}\n`));
 
-  const key = apiKey({ required: false });
+  const key = apiKey(provider, { required: false });
   check(!!key, 'API key found',
-    key ? `${key.slice(0, 8)}…${key.slice(-4)}` : 'set OPENROUTER_API_KEY or run `opencode auth login`');
+    key ? `${key.slice(0, 8)}…${key.slice(-4)}` : provider.hint);
 
   const runner = findRunner();
   check(!!runner, 'a runner is installed', runner || 'install one: npm i -g opencode-ai');
@@ -87,8 +135,8 @@ async function cmdDoctor() {
     check(ok, `${tool} available`, ok ? '' : 'needed only for the remote-machine workflow');
   }
 
-  if (key) {
-    const { data } = await api('/key', { key });
+  if (key && provider.caps.spend) {
+    const { data } = await api(provider, '/key', { key });
     const tier = data.is_free_tier ? 'free tier' : 'paid';
     check(true, `key reachable (${tier})`, `spent today: ${money(data.usage_daily)}`);
     if (data.is_free_tier) {
@@ -97,6 +145,16 @@ async function cmdDoctor() {
         '  1000/day once the account has ever purchased 10 credits). A long review\n' +
         '  is many requests. `external-review quota` shows where you stand.'));
     }
+  } else if (key) {
+    // No spend endpoint: prove the key works the only way left, by listing
+    // models. "The key is set" is not the same claim as "the key works", and
+    // a doctor that conflates them is how you find out mid-review.
+    const { data } = await api(provider, '/models', { key });
+    check(Array.isArray(data), 'key reachable', `${data?.length ?? 0} models visible`);
+    console.log(C.dim(
+      `\n  ${provider.label} publishes no spend or quota endpoint, so this tool\n` +
+      '  cannot show you what is left. `external-review quota` explains what the\n' +
+      '  limits are and where the only real number lives.'));
   }
 
   console.log(bad ? C.y('\nSome checks want attention.\n') : C.g('\nReady.\n'));
@@ -111,8 +169,10 @@ function findRunner() {
 
 // ------------------------------------------------------------------- quota
 
-async function cmdQuota() {
-  const { data } = await api('/key');
+async function cmdQuota(args = []) {
+  const provider = resolveProvider(args);
+  if (!provider.caps.spend) return quotaWithoutAnEndpoint(provider);
+  const { data } = await api(provider, '/key');
   console.log(C.b('\nAccount\n'));
   const row = (k, v) => console.log(`  ${k.padEnd(18)} ${v}`);
   row('tier', data.is_free_tier ? C.y('free') : C.g('paid'));
@@ -154,15 +214,54 @@ async function cmdQuota() {
   console.log();
 }
 
+/* What to say when the provider will not tell you.
+ *
+ * The temptation is to print a table of zeroes. That reads like "you have spent
+ * nothing and may proceed", which is a claim this tool cannot make. So it says
+ * what the published limits are, where the only authoritative number lives, and
+ * what will happen when it runs out.
+ */
+function quotaWithoutAnEndpoint(provider) {
+  if (provider.id !== 'nvidia') {
+    console.log(C.y(`\n  ${provider.label} publishes no quota endpoint.\n`));
+    return;
+  }
+  console.log(C.b(`\n${provider.label}\n`));
+  console.log(C.dim(
+    '  There is no quota API. The credit balance exists only in the web UI:\n' +
+    '  https://build.nvidia.com → your account → API credits.\n'));
+  console.log(C.y('  What the free tier is'));
+  console.log(C.dim(
+    '  credits        ~1,000 on joining the free NVIDIA Developer Program, no\n' +
+    '                 card required. Roughly one credit per API call, so a\n' +
+    '                 whole-subsystem review (40-150 requests) is a visible\n' +
+    '                 fraction of the whole allowance.\n' +
+    '  rate           40 requests/minute; increases to 200 RPM are granted on\n' +
+    '                 request in the developer forums.\n' +
+    '  refill         credits are a POOL, not a daily allowance. Unlike\n' +
+    '                 OpenRouter\'s free tier they do NOT reset overnight - when\n' +
+    '                 they are gone you request more or you stop. Plan the whole\n' +
+    '                 review, not the day.\n'));
+  console.log(C.y('  Two terms that matter more than the credits'));
+  console.log(C.dim(
+    '  Read `external-review providers <model>` before your first pass. The\n' +
+    '  NVIDIA API Trial Terms of Service prohibit submitting confidential data\n' +
+    '  and prohibit production use - both are contractual, not advisory, and\n' +
+    '  neither has an equivalent on OpenRouter.\n'));
+}
+
 // ------------------------------------------------------------------ models
 
 async function cmdModels(args) {
+  const provider = resolveProvider(args);
   const wantFree = args.includes('--free');
   const wantAll = args.includes('--all');
   const limit = Number(argValue(args, '--limit') ?? (wantAll ? 1e9 : 25));
   const minCtx = Number(argValue(args, '--min-context') ?? 60000);
 
-  const { data } = await api('/models');
+  if (!provider.caps.contextLength) return modelsWithoutMetadata(provider, { limit, wantFree });
+
+  const { data } = await api(provider, '/models');
   let models = data.filter((m) => (num(m.context_length) ?? 0) >= minCtx);
   if (wantFree) models = models.filter(isFree);
 
@@ -181,6 +280,35 @@ async function cmdModels(args) {
   console.log(C.dim('\n  Next: `external-review providers <id>` to see who serves it and where.\n'));
 }
 
+/* Listing when the catalog publishes ids and nothing else.
+ *
+ * Ranking by context window is the whole method - a model that cannot hold the
+ * subsystem cannot review it - and NVIDIA's OpenAI-compatible /models returns
+ * no context length, no pricing, no per-endpoint anything. So this prints the
+ * ids and says plainly which question it cannot answer, rather than sorting by
+ * something irrelevant and looking authoritative.
+ */
+async function modelsWithoutMetadata(provider, { limit, wantFree }) {
+  const { data } = await api(provider, '/models');
+  const ids = data.map((m) => m.id).sort();
+  console.log(C.b(`\n${ids.length} model(s) on ${provider.label}\n`));
+  if (wantFree) {
+    console.log(C.dim(
+      '  --free is meaningless here: every catalog model draws on the same\n' +
+      '  credit pool, so nothing is free and nothing is separately priced.\n'));
+  }
+  for (const id of ids.slice(0, limit)) console.log(`  ${id}`);
+  if (ids.length > limit) console.log(C.dim(`\n  …${ids.length - limit} more. --all to list them.`));
+  console.log(C.y('\n  What this listing cannot tell you'));
+  console.log(C.dim(
+    '  This endpoint publishes ids only - no context window, no price, no\n' +
+    '  per-endpoint metadata. Since ranking by context is how you pick a review\n' +
+    '  model, check the window on the model\'s page at build.nvidia.com before\n' +
+    '  you commit a pass to it. A model that cannot hold the subsystem will\n' +
+    '  truncate it and review the part it kept, silently.\n'));
+  console.log(C.dim('  Next: `external-review providers <id> --provider nvidia`.\n'));
+}
+
 function argValue(args, flag) {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
@@ -189,12 +317,16 @@ function argValue(args, flag) {
 // --------------------------------------------------------------- providers
 
 async function cmdProviders(args) {
-  const model = args.find((a) => !a.startsWith('-'));
-  if (!model) die('usage: external-review providers <model-id>');
+  const provider = resolveProvider(args);
+  const flags = new Set(['--provider']);
+  const model = args.find((a, i) => !a.startsWith('-') && !flags.has(args[i - 1]));
+  if (!model) die('usage: external-review providers <model-id> [--provider ID]');
+
+  if (!provider.caps.endpoints) return providerIsTheOperator(provider, model);
 
   const [{ data: detail }, { data: providers }] = await Promise.all([
-    api(`/models/${model}/endpoints`),
-    api('/providers'),
+    api(provider, `/models/${model}/endpoints`),
+    api(provider, '/providers'),
   ]);
   const byName = new Map(providers.map((p) => [p.name, p]));
 
@@ -289,6 +421,59 @@ async function cmdProviders(args) {
  * which is what a real repo's only false positive of this class turned out to
  * be. So it gets its own whole-text pattern, matched separately.
  */
+/* A first-party catalog: one operator, no routing, but real terms.
+ *
+ * OpenRouter's version of this command answers "which of several companies
+ * might receive your source". On NVIDIA's catalog that question is trivial -
+ * NVIDIA runs it - and the interesting question moves to the contract. Two of
+ * its clauses have no OpenRouter equivalent and both are quoted here from the
+ * primary source rather than paraphrased from a blog, because the marketing
+ * pages and the Terms of Service disagree with each other and the ToS is the
+ * one you actually agreed to.
+ */
+function providerIsTheOperator(provider, model) {
+  console.log(C.b(`\n${model}  ${C.dim('via ' + provider.label)}\n`));
+  console.log(`  ${C.c('NVIDIA Corporation')}`);
+  console.log('    headquarters  US (Santa Clara, CA)');
+  console.log(`    routing       ${C.dim('none — first-party catalog, NVIDIA serves every request')}`);
+  console.log(`    endpoint      ${C.dim(provider.base)}`);
+  console.log(`    terms         ${C.dim('https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf')}`);
+  console.log(`    privacy       ${C.dim('https://www.nvidia.com/en-us/about-nvidia/privacy-policy/')}`);
+
+  console.log(C.y('\n  Two clauses to read before you send anything\n'));
+  console.log(C.dim(
+    '  1. YOU AGREE NOT TO SUBMIT CONFIDENTIAL DATA. Not "it may be trained on"\n' +
+    '     — you undertake not to send it. §2.6(a): you agree you will not\n' +
+    '     "include any confidential information, controlled or sensitive data,\n' +
+    '     including protected health information, personal data ... or data that\n' +
+    '     was processed or collected in violation of law".\n' +
+    '     This is stronger than OpenRouter\'s free-tier trade. There, sending\n' +
+    '     private code is a risk you accept; here it is a breach of the terms.\n' +
+    '     Client code under NDA does not belong on this endpoint at any price.\n\n' +
+    '  2. TRIAL USE ONLY, NOT PRODUCTION. §1.2 grants access "for limited trial\n' +
+    '     purposes only and without use of the API Service or Generated Content\n' +
+    '     in production". Reviewing your own source is development and testing,\n' +
+    '     so a code review sits inside that. Wiring the same key into CI that\n' +
+    '     gates releases does not, and NVIDIA AI Enterprise is the licence for\n' +
+    '     that.\n'));
+  console.log(C.y('  What NVIDIA says it does with what you send\n'));
+  console.log(C.dim(
+    '  §3.3 collects session metrics, error and execution logs, your feedback,\n' +
+    '  "and (iv) User Content and Generated Content to improve NVIDIA products\n' +
+    '  and services, including AI models". Use "will be logged for security,\n' +
+    '  fraud or abuse monitoring and shared with third party service providers".\n' +
+    '  §2.4 sets a 30-day store for User Content on the services that keep it,\n' +
+    '  with security logging on top of that.\n\n' +
+    '  Some NVIDIA marketing pages describe the catalog as stateless with no\n' +
+    '  content logging. That is not what the Terms of Service you accepted say.\n' +
+    '  Where they disagree, believe the contract.\n'));
+  console.log(C.dim(
+    '  Verdict, so you can decide rather than guess: fine for open source and\n' +
+    '  for your own projects. Not for anything under an NDA, a customer\n' +
+    '  contract, or a data-residency rule — there, the answer is a paid endpoint\n' +
+    '  whose terms you have read, ZDR, or a model you host yourself.\n'));
+}
+
 const PRIVATE_KEY_BLOCK =
   /-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----[\r\n\\]+\s*[A-Za-z0-9+/=]{20,}/;
 
@@ -474,17 +659,30 @@ function splitDest(dest) {
 // --------------------------------------------------------------------- run
 
 function cmdRun(args) {
+  const provider = resolveProvider(args);
   const promptFile = argValue(args, '--prompt');
-  const model = argValue(args, '--model');
+  const rawModel = argValue(args, '--model');
+  // Accept both `nvidia/moonshotai/kimi-k2` and the bare catalog id. The runner
+  // needs the provider prefix; typing it twice is the commoner mistake.
+  const model = rawModel && !rawModel.startsWith(provider.runnerPrefix)
+    ? provider.runnerPrefix + rawModel
+    : rawModel;
   const cwd = argValue(args, '--in') ?? process.cwd();
   const out = argValue(args, '--out') ?? join(tmpdir(), `review-${Date.now()}.md`);
   if (!promptFile || !model) {
-    die('usage: external-review run --prompt FILE --model ID [--in DIR] [--out FILE]');
+    die('usage: external-review run --prompt FILE --model ID [--provider ID] [--in DIR] [--out FILE]');
   }
   if (!existsSync(promptFile)) die(`no such prompt file: ${promptFile}`);
 
   const runner = findRunner();
   if (!runner) die('no runner found. Install one: npm i -g opencode-ai');
+
+  // A provider the runner has never heard of fails deep inside it, with a
+  // message about an unknown model rather than about missing configuration.
+  if (provider.id !== 'openrouter' && !runnerKnowsProvider(cwd, provider.id)) {
+    die(`your runner has no "${provider.id}" provider configured.\n` +
+        `  Run: external-review runner-config --provider ${provider.id} --write`);
+  }
 
   const prompt = readFileSync(promptFile, 'utf8');
   info(`model   ${model}`);
@@ -503,6 +701,96 @@ function cmdRun(args) {
   });
 }
 
+
+// ------------------------------------------------------- runner-config
+
+/* Teach the runner about a provider it does not ship with.
+ *
+ * opencode knows OpenRouter natively and nothing else here does. Any
+ * OpenAI-compatible endpoint needs four things declared in opencode.json - an
+ * id, the openai-compatible SDK package, a baseURL and a key - plus the models
+ * you want to appear. This writes that block, merging rather than replacing so
+ * an existing config survives.
+ *
+ * The key goes in as `{env:NAME}`, never inlined: a config file gets committed,
+ * copied to a review box and pasted into issues, and a key in it is a key
+ * disclosed.
+ */
+function runnerConfigFor(provider) {
+  if (provider.id === 'openrouter') {
+    return { native: true };
+  }
+  return {
+    provider: {
+      [provider.id]: {
+        npm: '@ai-sdk/openai-compatible',
+        name: provider.label,
+        options: {
+          baseURL: provider.base,
+          apiKey: `{env:${provider.env[0]}}`,
+        },
+        models: {},
+      },
+    },
+  };
+}
+
+function runnerKnowsProvider(cwd, id) {
+  if (id === 'openrouter') return true;
+  for (const f of [join(cwd, 'opencode.json'), join(homedir(), '.config/opencode/opencode.json')]) {
+    if (!existsSync(f)) continue;
+    try {
+      if (JSON.parse(readFileSync(f, 'utf8'))?.provider?.[id]) return true;
+    } catch { /* a broken config is not a configured provider */ }
+  }
+  return false;
+}
+
+function cmdRunnerConfig(args) {
+  const provider = resolveProvider(args);
+  const models = (argValue(args, '--models') ?? '').split(',').map((m) => m.trim()).filter(Boolean);
+  const block = runnerConfigFor(provider);
+
+  if (block.native) {
+    console.log(C.g(`\n  ${provider.label} needs no runner config — opencode knows it natively.\n`));
+    return;
+  }
+  for (const m of models) block.provider[provider.id].models[m] = {};
+
+  if (!args.includes('--write')) {
+    console.log(C.b(`\n  opencode.json block for ${provider.label}\n`));
+    console.log(JSON.stringify(block, null, 2));
+    console.log(C.dim(
+      `\n  Add it to ./opencode.json (this project) or ~/.config/opencode/opencode.json\n` +
+      '  (everywhere), or re-run with --write to merge it into ./opencode.json.\n' +
+      `  Then export ${provider.env[0]} and restart the runner — it does not\n` +
+      '  pick up provider changes while running.\n' +
+      '  Model ids must match the catalog EXACTLY; add them with\n' +
+      '  --models a,b or opencode will not list them.\n'));
+    return;
+  }
+
+  const target = join(process.cwd(), 'opencode.json');
+  let current = {};
+  if (existsSync(target)) {
+    try { current = JSON.parse(readFileSync(target, 'utf8')); }
+    catch { die(`${target} is not valid JSON; refusing to overwrite it.`); }
+  }
+  // Merge, never clobber: this file is usually somebody's working config.
+  current.$schema ??= 'https://opencode.ai/config.json';
+  current.provider = { ...(current.provider || {}) };
+  const existing = current.provider[provider.id];
+  current.provider[provider.id] = {
+    ...block.provider[provider.id],
+    ...(existing || {}),
+    models: { ...(existing?.models || {}), ...block.provider[provider.id].models },
+  };
+  writeFileSync(target, `${JSON.stringify(current, null, 2)}\n`);
+  console.log(C.g(`\n  merged into ${target}`));
+  console.log(C.dim(
+    `\n  Now: export ${provider.env[0]}=... and restart the runner.\n` +
+    '  The key is referenced as {env:...}, never written to the file.\n'));
+}
 
 // ----------------------------------------------------------- install-skill
 
@@ -553,11 +841,21 @@ ${C.b('Commands')}
   models [--free] [--all]    candidate models, ranked by context window
          [--min-context N] [--limit N]
   providers <model-id>       who actually serves that model, and from where
+  runner-config [--write]    teach your runner a non-native provider
+                [--models a,b]
   scan [--in DIR]            find credentials INSIDE source files, which no
                              filename exclusion can catch
   sync --to HOST:DIR         copy your source to a review machine, secrets
        [--from DIR] [--exclude PATH]   excluded — then VERIFY they are absent
   run --prompt FILE --model ID [--in DIR] [--out FILE]
+
+${C.b('Providers')}
+  Every command takes ${C.c('--provider <id>')} (or $EXTERNAL_REVIEW_PROVIDER).
+  ${C.c('openrouter')}  default. Many models behind one key; publishes who serves
+              each one, from where, and under which policy.
+  ${C.c('nvidia')}      build.nvidia.com. ~1,000 free credits, 40 req/min, one
+              operator. Read ${C.c('providers')} first: its terms forbid sending
+              confidential data and forbid production use.
 
 ${C.b('Typical first run')}
   external-review doctor
@@ -575,7 +873,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 const run = {
   doctor: cmdDoctor, quota: cmdQuota, models: cmdModels,
   providers: cmdProviders, scan: cmdScan, sync: cmdSync, run: cmdRun,
-  'install-skill': cmdInstallSkill,
+  'runner-config': cmdRunnerConfig, 'install-skill': cmdInstallSkill,
 }[cmd];
 
 if (!run) { console.log(HELP); process.exit(cmd ? 1 : 0); }
