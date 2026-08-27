@@ -974,6 +974,31 @@ function judgeRun(output, prompt) {
       hints,
     };
   }
+  // LENGTH IS NOT SHAPE. A pass can return kilobytes of thinking-aloud - "let me
+  // read the store next", "I have a good picture now" - run out of room, and
+  // stop before writing the report it was asked for. That output is long, has no
+  // refusal marker, and is not a review. Observed on a real pass that returned
+  // 11 KB of exploration and no findings at all.
+  //
+  // So: if the prompt DEMANDS a section heading, the output has to contain it.
+  // Only headings the prompt actually names are required, which keeps this
+  // honest for prompts that ask for something else entirely.
+  const demanded = [...prompt.matchAll(/headed\s+"([A-Z][A-Z ]{2,20})"/g)]
+    .map((m) => m[1]);
+  const missing = demanded.filter((h) => !output.includes(h));
+  if (missing.length) {
+    return {
+      ok: false,
+      why: `The output never contains the section(s) the prompt required: ` +
+           `${missing.join(', ')}. A long answer that stops before the report ` +
+           'is not a short review, it is an unfinished one.',
+      hints: [
+        'Usually means the model ran out of room mid-exploration.',
+        'Narrow the scope, or use a model with a larger context window.',
+        'The partial output is kept - the leads in it are often still worth reading.',
+      ],
+    };
+  }
   return { ok: true };
 }
 

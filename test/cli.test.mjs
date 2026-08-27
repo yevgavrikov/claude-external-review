@@ -428,3 +428,43 @@ test('plan gives a concurrency ceiling, not just a rate', () => {
   assert.match(out, /die mid-review/,
     'the cost of exceeding it is the part that changes behaviour, not the number');
 });
+
+test('a long answer that never reaches the required sections is not a review', () => {
+  // Observed: a pass returned 11 KB of "let me read the store next" and stopped
+  // before writing any findings. Long, no refusal marker, not a review. Length
+  // was the only shape check and it passed.
+  const dir = mkdtempSync(join(tmpdir(), 'er-shape-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake,
+    '#!/bin/sh\necho "Let me read the core files. Now let me check the store."\n' +
+    "head -c 5000 < /dev/zero | tr '\\\\0' 'a'\necho\nexit 0\n");
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'),
+    'Review this subsystem.\nTHEN a section headed "HELD UP" with what you checked.\n'
+    + 'THEN a section headed "POLISH" with UX gaps.\n');
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md')],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /HELD UP/);
+  assert.match(r.stderr, /POLISH/);
+});
+
+test('a report that DOES contain the required sections passes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-shape-ok-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake,
+    '#!/bin/sh\necho "## Findings"\necho "## HELD UP"\necho "## POLISH"\n' +
+    "head -c 3000 < /dev/zero | tr '\\\\0' 'a'\necho\nexit 0\n");
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'),
+    'Review this.\nTHEN a section headed "HELD UP".\nTHEN a section headed "POLISH".\n');
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md')],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  assert.equal(r.status, 0, 'a real report must not trip the shape guard');
+});
