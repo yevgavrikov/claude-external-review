@@ -181,6 +181,100 @@ construction.
 
 ---
 
+## 5b. A confirmed precondition is not a confirmed failure
+
+The single most expensive mistake of a full day's reviewing, made independently
+by two sessions within an hour of each other.
+
+A peer reported: running the integration suites leaves the plugin registrant
+carrying `integration_test`, which is not on the release classpath, so the next
+release build fails. The precondition was checked and TRUE — the registrant did
+carry it, on both platforms. A guard was written, wired into the release scripts,
+committed with a message asserting "the tree is unable to build a release".
+
+Then the build was run, to watch it fail. **It succeeded.** The toolchain
+regenerates that file during a release build and drops dev-only plugins. The
+guard prevented nothing and would have forced a full clean rebuild before every
+release. Reverted an hour later.
+
+The peer's half was worse in an instructive way: their failure was real, but
+their predicate never discriminated — the same string was present in the broken
+tree AND the working one. The actual cause was running two builds concurrently in
+one checkout. Real precondition, real failure, unrelated to each other.
+
+So:
+
+- **Observe the failure before writing the fix.** Not the precondition, the
+  failure. They are different claims and only one of them is the bug.
+- **A peer's report plus a matching precondition feels like verification.** It is
+  the strongest false signal in this whole document, because both halves are
+  true.
+- **Two repos sharing a guardrail do not share a toolchain.** "It happens there
+  and the conditions match here" is a hypothesis.
+- **Elaboration reads like rigour.** The peer wrote the guard, then a verify
+  step, then hardened the verify — three passes over a mechanism never once
+  observed firing. Depth of work on an unchecked premise produces confidence, not
+  correctness.
+
+The cheap check neither session did until late: run it without the fix and see
+whether it actually breaks.
+
+## 5c. A pass that produced no report is not a pass that found nothing
+
+A review returned 11 KB of thinking-aloud — "let me read the store next", "I have
+a good picture now" — ran out of context, and stopped before writing a single
+finding. Exit 0, long output, no refusal marker.
+
+Two lessons, and the second is the useful one.
+
+**Length is not shape.** A run guard that checks output size passes this happily.
+Check that the output contains the sections the prompt actually demanded, parsed
+from the prompt rather than hardcoded.
+
+**Read the partial output anyway.** That abandoned transcript had already noticed
+a real bug mid-thought and written down why it was wrong — a quantity field
+turning unreadable input into a silent zero, destroying a real stock count on
+edit. It was fixed from the exploration of a pass that formally produced nothing.
+Discarding a "failed" run unread is throwing away the part that was working.
+
+## 5d. Ways a test quietly stops testing
+
+Four seen in one day, all green, all wrong:
+
+- **The fixture measures the easy case.** A widget test rendered a clock as
+  "18:00" because the app picks 12h/24h from the DISTANCE UNIT, not from the
+  locale. The long string — "6:00 PM" — was the one that mattered. Assert the
+  precondition (`expect(hero.data, '6:00 PM')`) or the test silently measures
+  something easier than it claims.
+- **The assertion cannot fail in the case it was written for.** A `FittedBox`
+  shrink test measured the child's size — but the scaling happens in a transform
+  ABOVE the child, so the number is identical either way. And the guard only
+  engages when the child overflows, which it did not. Two independent reasons,
+  neither visible by reading it.
+- **It degrades to vacuous when ported.** A "does it wrap?" assertion of
+  `height > 120` works only because that string wraps at that width. Move it to a
+  narrower card or a shorter locale and it passes for an unrelated reason — and
+  keeps passing after the behaviour breaks. Re-run the revert check after moving
+  a test, not just after writing it.
+- **Two rules can satisfy one assertion.** A test for "refusal is detected"
+  passed with refusal-detection disabled, because a length rule caught the same
+  fixture. If two mechanisms can make an assertion true, it does not test either.
+
+## 5e. Documentation is not propagation
+
+The most common shape behind a real finding, stated plainly: **a decision written
+down reaches exactly the call sites somebody remembered.**
+
+Three sites in one app parsed rider-typed numbers with a bare `tryParse`, in a
+codebase where three OTHER sites already carried comments saying "use the shared
+parser, NOT tryParse", with the reason. The helper existed. The decision was
+taken and documented. It simply had not travelled.
+
+When a finding cites a comment that argues the correct rule, the question is
+never "is the rule right" — it is **"where else does this rule not reach?"** Grep
+for the pattern, not the file. That is what turns one fix into an audit, and an
+audit is what stops the seventh recurrence.
+
 ## 6. Reading findings
 
 Real outcomes from real passes:

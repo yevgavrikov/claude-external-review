@@ -1,6 +1,6 @@
 {
   "name": "external-review",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Review your code with a second, independent model - and know what it costs, where your source goes, and which findings to believe. Ships a Claude Code skill.",
   "type": "module",
   "bin": {

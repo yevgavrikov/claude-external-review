@@ -1003,6 +1003,139 @@ function judgeRun(output, prompt) {
 }
 
 
+// -------------------------------------------------------------- stats
+
+/* What a pass actually produced, counted rather than felt.
+ *
+ * Findings files are prose, so this parses the SHAPE the prompts ask for -
+ * severity tags, file:line refs, the HELD UP and POLISH sections - and is
+ * explicit about its own uncertainty. It is a reading aid, not an oracle: a
+ * pass that formats its severities differently will undercount, and the output
+ * says so rather than reporting a confident zero.
+ *
+ * The chart is drawn in text on purpose. A review summary belongs in the
+ * terminal beside the findings, and a PNG would need a dependency for something
+ * a bar of blocks says just as well.
+ */
+const SEV = ['P0', 'P1', 'P2'];
+
+function readFindings(file) {
+  const raw = readFileSync(file, 'utf8')
+    // Strip ANSI, since these files are usually captured runner output.
+    .replace(/\x1b\[[0-9;]*m/g, '');
+  const lines = raw.split('\n');
+
+  const counts = { P0: 0, P1: 0, P2: 0 };
+  const files = new Map();
+  let held = 0;
+  let polish = 0;
+  let section = 'findings';
+
+  for (const line of lines) {
+    const h = /^#{1,3}\s+(.*)$/.exec(line);
+    if (h) {
+      const t = h[1].toUpperCase();
+      if (t.includes('HELD UP')) section = 'held';
+      else if (t.includes('POLISH')) section = 'polish';
+      else if (t.includes('FINDING')) section = 'findings';
+    }
+    // A severity only counts once per line, and only in the findings section -
+    // a HELD UP entry mentioning "the P1 above" is not another P1.
+    if (section === 'findings') {
+      const sev = SEV.find((x) => new RegExp(`\\b${x}\\b`).test(line));
+      if (sev && /^\s*(#{1,3}|[-*]|\*\*)/.test(line)) counts[sev]++;
+    }
+    if (section === 'held' && /^\s*[-*]\s+/.test(line)) held++;
+    if (section === 'polish' && /^\s*[-*]\s+/.test(line)) polish++;
+
+    for (const m of line.matchAll(/([\w/.-]+\.(?:dart|js|ts|kt|swift|java)):(\d+)/g)) {
+      // Key on the BASENAME. The same file gets cited as `worker.js` in one
+      // finding and `backend/worker.js` in the next, and counting those apart
+      // split the most-cited file in half - which is precisely the signal this
+      // list exists to show.
+      const base = m[1].split('/').pop();
+      const prev = files.get(base);
+      files.set(base, {
+        n: (prev?.n ?? 0) + 1,
+        // Keep the most specific spelling seen, so the display stays useful.
+        path: (prev?.path ?? '').length >= m[1].length ? prev.path : m[1],
+      });
+    }
+  }
+  return { file, counts, held, polish, files, bytes: raw.length, lines: lines.length };
+}
+
+function bar(n, max, width = 28) {
+  if (max <= 0) return '';
+  return '█'.repeat(Math.max(n > 0 ? 1 : 0, Math.round((n / max) * width)));
+}
+
+function cmdStats(args) {
+  const targets = args.filter((a) => !a.startsWith('-'));
+  if (!targets.length) {
+    die('usage: external-review stats <findings.md> [more.md ...]');
+  }
+  const reports = [];
+  for (const t of targets) {
+    if (!existsSync(t)) die(`no such findings file: ${t}`);
+    reports.push(readFindings(t));
+  }
+
+  const total = { P0: 0, P1: 0, P2: 0 };
+  let held = 0;
+  let polish = 0;
+  const allFiles = new Map();
+  for (const r of reports) {
+    for (const k of SEV) total[k] += r.counts[k];
+    held += r.held;
+    polish += r.polish;
+    for (const [base, v] of r.files) {
+      const prev = allFiles.get(base);
+      allFiles.set(base, {
+        n: (prev?.n ?? 0) + v.n,
+        path: (prev?.path ?? '').length >= v.path.length ? prev.path : v.path,
+      });
+    }
+  }
+
+  console.log(C.b(`\n${reports.length} pass(es)\n`));
+  const maxSev = Math.max(1, ...SEV.map((k) => total[k]), held, polish);
+  const row = (label, n, colour) =>
+    console.log(`  ${label.padEnd(10)} ${String(n).padStart(3)}  ${colour(bar(n, maxSev))}`);
+  row('P0', total.P0, C.r);
+  row('P1', total.P1, C.y);
+  row('P2', total.P2, C.dim);
+  row('held up', held, C.g);
+  row('polish', polish, C.c);
+
+  if (reports.length > 1) {
+    console.log(C.b('\n  per pass\n'));
+    for (const r of reports) {
+      const n = SEV.reduce((a, k) => a + r.counts[k], 0);
+      console.log(`  ${String(n).padStart(3)} finding(s)  ${C.dim(`${r.held} held, ${(r.bytes / 1024) | 0} KB`)}  ${r.file}`);
+    }
+  }
+
+  const hot = [...allFiles.values()].sort((a, b) => b.n - a.n).slice(0, 8);
+  if (hot.length) {
+    console.log(C.b('\n  most-cited files\n'));
+    const max = hot[0].n;
+    for (const { n, path } of hot) {
+      console.log(`  ${String(n).padStart(3)}  ${C.dim(bar(n, max, 16).padEnd(16))} ${path}`);
+    }
+  }
+
+  console.log(C.y('\n  What these numbers are not\n'));
+  console.log(C.dim(
+    '  A count of CLAIMS, not of bugs. Findings get refuted - in one real\n' +
+    '  session about half the P1s did not survive being checked against the\n' +
+    '  code. Read `held up` as the calibration signal rather than the finding\n' +
+    '  count as a score: a pass that independently re-derives things you know\n' +
+    '  to be true is one whose findings are worth the time.\n\n' +
+    '  Parsed from prose. A pass that tags severities differently undercounts\n' +
+    '  here, and a zero may mean "nothing found" or "shape not recognised".\n'));
+}
+
 // ------------------------------------------------------- runner-config
 
 /* Teach the runner about a provider it does not ship with.
@@ -1149,6 +1282,7 @@ ${C.b('Commands')}
   models [--free] [--all]    candidate models, ranked by context window
          [--min-context N] [--limit N]
   providers <model-id>       who actually serves that model, and from where
+  stats <findings.md ...>    count what a pass produced, with a text chart
   runner-config [--write]    teach your runner a non-native provider
                 [--global] [--models a,b]
   scan [--in DIR]            find credentials INSIDE source files, which no
@@ -1181,7 +1315,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 const run = {
   doctor: cmdDoctor, quota: cmdQuota, models: cmdModels,
   providers: cmdProviders, scan: cmdScan, sync: cmdSync, run: cmdRun,
-  'runner-config': cmdRunnerConfig, 'install-skill': cmdInstallSkill,
+  'runner-config': cmdRunnerConfig, 'install-skill': cmdInstallSkill, stats: cmdStats,
   plan: cmdPlan,
 }[cmd];
 

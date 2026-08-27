@@ -326,6 +326,68 @@ trusting rsync's exit code.
 
 ---
 
+## What a real session looks like
+
+Numbers from one day of use on a production mobile app, because "it finds bugs"
+is not a useful claim on its own:
+
+| | |
+|---|---|
+| passes run | 7, across 2 providers and 4 models |
+| passes that died mid-review | 4 — all rate limits, all free to re-run |
+| findings acted on | 8 fixed, **6 refuted**, 3 filed as issues |
+| severe findings that did not survive | roughly half the P1s |
+
+**The refutation rate is the point, not an embarrassment.** One P1 contradicted
+its own worked example. One was already pinned by a test the pass had not read.
+One was refuted by the pass's own HELD UP section a few paragraphs later. A
+reviewer that is right every time is a reviewer you have stopped checking — and
+the whole method here is reproduce-before-fixing, which only means something if
+some findings fail it.
+
+Two of the day's best results were not findings at all:
+
+- A pass that **produced no report** — 11 KB of exploration, out of context
+  before writing a single finding — had already caught a real bug mid-thought.
+  Read the partial output before re-running.
+- A finding cited a code comment that argued the correct rule. The rule was
+  right; it simply had not reached three other call sites. **Documentation is not
+  propagation** — that one finding became an audit that fails on the next one.
+
+### 5. See what a pass produced
+
+```bash
+external-review stats findings-*.md
+```
+
+```
+3 pass(es)
+
+  P0           1  █
+  P1           6  ██████
+  P2          19  ████████████████████
+  held up     26  ████████████████████████████
+  polish       5  █████
+
+  most-cited files
+
+   12  ████████████████ backend/worker.js
+   10  █████████████    lib/data/providers.dart
+   10  █████████████    lib/main.dart
+```
+
+**Read `held up` before the finding count.** It is the calibration signal: a pass
+that independently re-derives things you already know to be true is one whose
+findings are worth your afternoon. A tall P-bar over a short held-up list is a
+pass that was guessing.
+
+The most-cited files are the other useful column — three independent passes
+converging on the same file is a signal no single finding gives you.
+
+It parses prose, so it is a reading aid rather than an oracle, and it says so in
+its own output: these are **claims, not bugs**, and a zero may mean "found
+nothing" or "shape not recognised".
+
 ## The part people skip, and shouldn't
 
 **A finding is a claim, not a fact.** Reproduce before fixing.
@@ -357,6 +419,7 @@ codebases.
 | `models [--free] [--all] [--min-context N] [--limit N]` | candidates by context window |
 | `plan [--provider ID]` | how many passes fit per provider, and where to spend them |
 | `providers <model-id>` | who serves it, HQ, datacenters, policy links |
+| `stats <findings.md ...>` | count what a pass produced, with a text chart |
 | `runner-config [--write] [--models a,b]` | teach your runner a provider it does not ship with |
 | `scan [--in DIR]` | find credentials **inside** source files, which no filename exclusion catches |
 | `sync --to HOST:DIR [--from DIR] [--exclude PATH]` | scan, refuse if anything is found, copy excluding secrets, then verify |
@@ -372,6 +435,26 @@ codebases.
   not, and how to decide.
 - **[`examples/prompts/`](examples/prompts/)** — the actual prompts that found
   the bugs above, ready to adapt.
+
+## Where this came from
+
+Built while reviewing two sibling Flutter apps in parallel, with a second
+assistant session reviewing the other one and trading findings across. Most of
+what is in `docs/PLAYBOOK.md` is there because one of the two got something
+wrong and the other caught it:
+
+- The vacuity-check list grew every time a green test turned out to prove
+  nothing — including a test that passed with its own subject disabled, because a
+  second rule caught the same fixture.
+- **A confirmed precondition is not a confirmed failure** (PLAYBOOK 5b) cost both
+  sessions an afternoon and two reverted commits, in the same hour, independently.
+  Neither had observed the failure it was guarding against.
+- The `providers` command exists because "which country is this model from" is
+  the wrong question and somebody had to say so in code rather than in a README.
+
+If you are running two of these side by side, the most valuable thing you can
+send the other session is the finding that makes your own work look bad. That is
+the one they cannot get anywhere else.
 
 ## Contributing
 

@@ -468,3 +468,70 @@ test('a report that DOES contain the required sections passes', () => {
              OPENROUTER_API_KEY: 'sk-or-test' } });
   assert.equal(r.status, 0, 'a real report must not trip the shape guard');
 });
+
+// ------------------------------------------------------------------- stats
+
+test('stats counts severities, sections and file citations', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-stats-'));
+  const f = join(dir, 'findings.md');
+  writeFileSync(f, [
+    '## Findings',
+    '### P0 — a thing at lib/a.dart:12',
+    '### P1 — another at backend/worker.js:99',
+    '### P2 — minor at lib/a.dart:40',
+    '## HELD UP',
+    '- checked one thing',
+    '- checked another',
+    '## POLISH',
+    '- a ux gap at lib/b.dart:7',
+  ].join('\n'));
+  const out = run(['stats', f]);
+  assert.match(out, /P0\s+1/);
+  assert.match(out, /P1\s+1/);
+  assert.match(out, /P2\s+1/);
+  assert.match(out, /held up\s+2/);
+  assert.match(out, /polish\s+1/);
+  assert.match(out, /lib\/a\.dart/, 'the twice-cited file must be listed');
+});
+
+test('a severity named inside HELD UP is not counted as a finding', () => {
+  // "the P1 above turned out to be fine" is commentary, not a second P1.
+  const dir = mkdtempSync(join(tmpdir(), 'er-stats-held-'));
+  const f = join(dir, 'findings.md');
+  writeFileSync(f, [
+    '## Findings',
+    '### P1 — a real one at lib/a.dart:1',
+    '## HELD UP',
+    '- the P1 above does not apply to the sibling path',
+    '- P1 mentioned again here',
+  ].join('\n'));
+  assert.match(run(['stats', f]), /P1\s+1/,
+    'counting commentary would inflate every pass that explains itself');
+});
+
+test('the same file cited two ways is one file', () => {
+  // Findings cite `worker.js` in one line and `backend/worker.js` in the next.
+  // Counting those apart halves the very signal this list exists to show.
+  const dir = mkdtempSync(join(tmpdir(), 'er-stats-dedupe-'));
+  const f = join(dir, 'findings.md');
+  writeFileSync(f, [
+    '## Findings',
+    '### P1 — one at worker.js:10',
+    '### P1 — two at backend/worker.js:20',
+    '### P2 — three at backend/worker.js:30',
+  ].join('\n'));
+  const out = run(['stats', f]);
+  assert.match(out, /3\s+█+\s+backend\/worker\.js/,
+    'all three citations belong to one file, shown by its fullest path');
+});
+
+test('stats says what its numbers are not', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'er-stats-caveat-'));
+  const f = join(dir, 'findings.md');
+  writeFileSync(f, '## Findings\n### P1 — x at a.dart:1\n');
+  const out = run(['stats', f]);
+  assert.match(out, /count of CLAIMS, not of bugs/,
+    'a finding count printed without that caveat reads as a bug count');
+  assert.match(out, /shape not recognised/,
+    'a zero must not be reported as confident absence');
+});

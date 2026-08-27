@@ -2,7 +2,7 @@
 name: external-review
 description: "Review this codebase with a SECOND, independent model to find defects the primary model walked past. Use when the user asks to 'review the code deeper', 'find bugs we missed', 'use another model', 'get a second opinion', 'audit this subsystem', or wants coverage beyond what in-house review produced. Also use when choosing a review model, checking API quota before a long run, or deciding whether it is acceptable to send this code to a given provider."
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # External review — a second model, used properly
@@ -260,6 +260,50 @@ Two more, about the test itself:
   record" fixture that is really a *recoverable* record with one mistyped field
   asserts that recoverable data gets deleted — and stays green for months. Two
   separate codebases had one.
+
+## After a pass: count it, then discount it
+
+```bash
+external-review stats findings-*.md
+```
+
+Severity counts, HELD UP and POLISH sizes, and the files cited most often across
+passes. Two ways to read it that matter:
+
+- **`held up` before the finding count.** A tall severity bar over a short
+  held-up list is a pass that was guessing; a long, specific held-up list means
+  the findings above it are worth the time.
+- **Convergence.** Three independent passes citing the same file is a signal no
+  single finding carries.
+
+Report these to the user as CLAIMS, never as a bug count. In one session eight
+findings were fixed, six refuted and three filed — a headline of "17 bugs found"
+would have been wrong by more than half.
+
+## When a pass appears to fail
+
+**A run that produced no report is not a run that found nothing.** A pass can
+spend its whole context exploring, stop before writing a single finding, and exit
+0. Read the partial output before re-running: one such transcript had already
+identified a real bug mid-thought. `run` fails the command when the output lacks
+the sections your prompt demanded, and keeps the output for exactly this reason.
+
+**A rate-limited pass costs nothing to re-run** on a provider whose limit is
+requests-per-minute rather than a budget. Check `plan` before you decide whether
+to narrow the scope — the instinct to ration is right for a daily cap and wrong
+for a rate cap.
+
+**Expect to refute findings, including severe-looking ones.** In one session
+roughly half the P1s did not survive contact with the code: one contradicted its
+own worked example, one was already pinned by a test the pass had not read, one
+was refuted by the pass's own HELD UP section. That is not a broken reviewer —
+it is why the rule is reproduce-before-fixing. Refuting a finding WITH the code
+that disproves it is a real result; write it down so the next pass does not
+re-raise it.
+
+**And do not let a peer's report substitute for your own measurement.** A
+confirmed precondition is not a confirmed failure — see PLAYBOOK 5b, which cost
+two sessions an afternoon and two reverted commits.
 
 ## Working with a second session on a sibling codebase
 
