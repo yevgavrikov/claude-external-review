@@ -928,6 +928,25 @@ function cmdRun(args) {
         }
         process.exit(3);
       }
+      // 402 / payment_required is OpenRouter's answer when the free-model
+      // DAILY allowance is spent. It is not a rate limit - there is no window
+      // to wait out and no burst to blame - and it is not a billing problem
+      // either, which is what the words "payment required" will make a reader
+      // assume. It clears at the UTC day boundary like any daily cap.
+      if (/\b402\b|payment_required|payment required/i.test(buf)) {
+        const wait = rateLimitWaitSeconds({ limits: { resets: 'utc-day' } });
+        console.error(C.y(
+          `\n  DAILY FREE ALLOWANCE SPENT on ${provider.label}.`));
+        console.error(C.dim(
+          '  "payment_required" here does not mean a billing failure. The\n' +
+          '  free-model requests for this UTC day are used up, that is all.\n' +
+          '  Nothing is owed and nothing is broken.\n' +
+          '  It resets at UTC midnight. Until then, run passes on another\n' +
+          '  provider - `external-review plan` shows what is left where.\n'));
+        console.error(`RETRY_AFTER_SECONDS=${wait}`);
+        // Never auto-retry this one: --retry would sleep for hours.
+        process.exit(3);
+      }
       if (/\b429\b|too many requests|rate.?limit/i.test(buf)) {
         const wait = rateLimitWaitSeconds(provider);
         console.error(C.y(

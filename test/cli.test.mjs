@@ -605,3 +605,28 @@ test('a 5xx is reported as transient, not as a rate limit or a bad prompt', () =
     'calling a 500 a rate limit would send the caller to wait out a window that '
     + 'does not exist');
 });
+
+test('a spent daily allowance is not reported as a billing problem', () => {
+  // OpenRouter answers 402 / payment_required when the free-model DAILY quota
+  // is gone. The words will make a reader think their card failed. Nothing is
+  // owed; it resets at UTC midnight.
+  const dir = mkdtempSync(join(tmpdir(), 'er-402-'));
+  const fake = join(dir, 'opencode');
+  writeFileSync(fake,
+    '#!/bin/sh\necho \'{"error":{"code":402,"message":"payment_required"}}\'\nexit 1\n');
+  execFileSync('chmod', ['+x', fake]);
+  writeFileSync(join(dir, 'p.txt'), 'review this'.repeat(60));
+  const r = spawnSync('node', [BIN, 'run', '--prompt', join(dir, 'p.txt'), '--model', 'x',
+    '--in', dir, '--out', join(dir, 'o.md'), '--retry', '3'],
+    { encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', HOME: dir, PATH: `${dir}:${process.env.PATH}`,
+             OPENROUTER_API_KEY: 'sk-or-test' } });
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /DAILY FREE ALLOWANCE SPENT/);
+  assert.match(r.stderr, /Nothing is owed/,
+    'the reader must not be sent to check their card');
+  const secs = Number(/RETRY_AFTER_SECONDS=(\d+)/.exec(r.stderr)?.[1]);
+  assert.ok(secs > 420, 'this clears at the UTC boundary, not in minutes');
+  assert.doesNotMatch(r.stderr, /re-attempting/,
+    '--retry must NOT sleep for hours on this one');
+});
