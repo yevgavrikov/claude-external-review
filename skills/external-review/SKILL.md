@@ -339,6 +339,38 @@ re-raise it.
 confirmed precondition is not a confirmed failure — see PLAYBOOK 5b, which cost
 two sessions an afternoon and two reverted commits.
 
+## A provider is configured on a MACHINE, not on a project
+
+Two agents can both "have external review" and share nothing. On 2026-08-27 one
+session ran passes through the CLI **on a laptop**, calling a provider API
+directly with a key in a local file. A second session ran passes through a
+**runner (opencode) on a VM**, authenticated to a different provider entirely.
+Same repo, same task, same tool name — different machine, different credential,
+different rate limit.
+
+The first session then told the second "the rate limit is account-wide, so it is
+yours tonight." That was false in both directions: no shared account existed, and
+the VM had no key for the provider being rationed. Hours were spent waiting for
+contention that could not occur.
+
+**A statement about another machine's configuration is a claim, and you cannot
+measure it from yours.** Before coordinating around a limit, have the session
+that owns the box run the check and report it:
+
+    external-review doctor --provider <id>
+
+Two consequences worth keeping:
+
+- **Model ids lie about providers.** A model named `<vendor>/<model>:free` served
+  through an aggregator is an *aggregator* model id. It needs the aggregator's
+  key and counts against the aggregator's quota — the vendor name in the string
+  says who trained it, not who is billing you. Mistaking one for the other sends
+  someone hunting for a key their machine never needed.
+- **When the sharing IS real, say so precisely.** One key across two sessions
+  means one rate window. Agree who is running, one pass at a time, rather than
+  assuming a fresh window per model — most per-minute limits are account-wide and
+  switching model buys nothing.
+
 ## Working with a second session on a sibling codebase
 
 If a related product has its own session, trade findings. It is a peer, not an
