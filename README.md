@@ -234,13 +234,26 @@ external-review run --provider nvidia --model moonshotai/kimi-k2 \
                     --prompt ./review.txt --out findings.md
 ```
 
-| | `openrouter` (default) | `nvidia` — [build.nvidia.com](https://build.nvidia.com) |
-|---|---|---|
-| shape | router in front of many operators | NVIDIA's own catalog, one operator |
-| free budget | 50 req/day, **resets daily** | **unlimited** — no credit cap, no daily cap |
-| rate limit | 20/min | 40/min, 200 on request |
-| discloses who serves it | yes | it is always NVIDIA |
-| the catch | free endpoints require opting into training + publishing | its terms **forbid** confidential data and production use |
+| | `openrouter` (default) | `nvidia` — [build.nvidia.com](https://build.nvidia.com) | `google` — [aistudio.google.com](https://aistudio.google.com/apikey) |
+|---|---|---|---|
+| shape | router in front of many operators | NVIDIA's own catalog, one operator | Google's own models, OpenAI-compatible surface |
+| free budget | 50 req/day, **resets daily** | **unlimited** — no credit cap, no daily cap | per-MODEL, unpublished here — read it in the console |
+| rate limit | 20/min | 40/min, 200 on request | per-model; treat a 429 as the real answer |
+| discloses who serves it | yes | it is always NVIDIA | it is always Google |
+| the catch | free endpoints require opting into training + publishing | its terms **forbid** confidential data and production use | free-tier prompts may be used to improve the models |
+
+The `google` row is deliberately vague where the others are specific. Its free
+limits differ per model and have moved more than once, so any figure printed
+here would be a secondary source going stale — which is the exact mistake the
+NVIDIA row above once made, quoting a "1,000 credit" cap that no longer existed.
+Read yours in the console and let a 429 correct you.
+
+**These three are not the whole answer.** Any OpenAI-compatible endpoint works
+via `runner-config`, and a local CLI agent you already pay for — codex, grok,
+antigravity, ollama — is often the least rationed reviewer available and needs
+no key at all. The skill's first instruction is to ASK the user what they have,
+because a user typically has three to five usable sources and volunteers none
+of them unless asked.
 
 That last row is not a footnote. OpenRouter's free tier is a trade you accept —
 your code may be trained on. NVIDIA's [API Trial Terms of
