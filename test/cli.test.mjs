@@ -138,9 +138,15 @@ test('scan does not flag config that is public by design', () => {
   // Firebase client config is an identifier, not a credential. Flagging what
   // every mobile repo commits teaches people to ignore the scanner, which
   // costs more than the warning is worth.
+  //
+  // THE FIXTURE IS SYNTHETIC ON PURPOSE. This test asserts the scanner stays
+  // QUIET, so a real value here is the one case the tool will never warn you
+  // about - and this file once carried a live project's Android key for
+  // exactly that reason, until GitHub's secret scanning flagged it. A fixture
+  // that proves "we do not flag X" must never be a real X.
   const dir = mkdtempSync(join(tmpdir(), 'er-scan-'));
   writeFileSync(join(dir, 'firebase_options.dart'),
-    'apiKey: "AIzaSyAhGmmMRLrt19Jl9AwpCWo1c41k0tAkNyQ",');
+    'apiKey: "AIzaSyEXAMPLE0NOTAREALKEY0000000000000000",');
   assert.match(run(['scan', '--in', dir]), /no high-signal secrets/);
 });
 
