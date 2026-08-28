@@ -32,6 +32,67 @@ sibling case.* It outperforms "look for bugs" by a wide margin, because it turns
 a search over infinite possible defects into a search over the codebase's own
 documented intentions.
 
+## FIRST: ask what they have. Do not assume two providers.
+
+**Before planning any pass, ask the user this and wait for the answer:**
+
+> Which of these can I use for review? (a) API keys — OpenRouter, NVIDIA,
+> Google AI Studio, anything else; (b) local CLI agents — codex, grok,
+> antigravity, ollama, or similar; (c) a VM or second machine I can run on.
+> More sources means more of the codebase reviewed, so list everything, even
+> free tiers you think are small.
+
+The agent that skips this reviews one subsystem with one model and reports it
+as "the review". A user typically has **three to five** usable sources and
+volunteers none of them, because nothing asked.
+
+### The two kinds of answer, which behave completely differently
+
+| | **local CLI agent** | **API provider** |
+|---|---|---|
+| examples | codex, grok, antigravity, ollama | OpenRouter, NVIDIA, Google AI Studio |
+| auth | already logged in; no key to place | needs a key in env |
+| quota | the vendor's own plan; invisible here | `doctor` / `quota` / `plan` can read or explain it |
+| how to run | invoke its own CLI directly | `external-review run --provider <id>` |
+| the trap | **stdin**: a detached CLI agent that inherits an open stdin hangs at 0% CPU looking exactly like deep thought. Always `< /dev/null` | empty output on 401/429; see the preflight |
+
+Local agents are the ones users forget they have, and they are often the
+LEAST rationed thing available — a subscription CLI has no per-request cost to
+you at all. Ask specifically.
+
+### Why more sources beats a bigger budget on one
+
+Diversity finds different bugs, and this is measured rather than assumed. Across
+two days on one codebase: an OpenRouter pass found a charge-pin bug; an NVIDIA
+pass found a regression introduced the same day; codex found three durability
+bugs in a subsystem the other two had already read and passed. **Each pass
+found what the others walked past**, and they share a lineage far more than
+they share blind spots.
+
+So allocate by SHAPE, not by size:
+
+- **broadest budget → discovery.** Whole-subsystem sweeps.
+- **scarcest budget → adversarial verification.** 1-3 requests per finding, and
+  a different lineage is worth most exactly here.
+- **local CLI agents → the long tail.** No metering, so use them for the scopes
+  you would otherwise cut.
+- **run passes on DIFFERENT scopes**, not the same one twice. Overlap wastes
+  the second provider.
+
+### Wiring a provider this tool does not ship with
+
+Any OpenAI-compatible endpoint works. Built in already: `openrouter`, `nvidia`,
+`google`. For anything else, the runner needs a provider block:
+
+```bash
+external-review runner-config --provider <id> --write --models a,b
+```
+
+If the tool has no entry for it at all, the honest fallback is to drive that
+vendor's own CLI directly and bring the findings back into the same
+reproduce-then-vacuity-check discipline. **The discipline is the valuable part,
+not this tool.**
+
 ## Before you run anything
 
 **Run these four in order. Do not skip to `run`.** Each catches a failure that

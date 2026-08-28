@@ -47,6 +47,35 @@ const PROVIDERS = {
           + 'is listed, it is the only way to get a long day out of a free account.',
     },
   },
+  google: {
+    label: 'Google AI Studio (Gemini)',
+    // Google publishes an OpenAI-COMPATIBLE surface alongside its native API.
+    // Point at this one, not generativelanguage's native path - the native
+    // shape is not /chat/completions and the runner cannot speak it.
+    base: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    env: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    authStoreKey: 'google',
+    hint: 'set GEMINI_API_KEY (aistudio.google.com/apikey, no card needed)',
+    runnerPrefix: 'google/',
+    // The OpenAI-compatible surface serves /models. Everything else - spend,
+    // pricing, per-endpoint metadata - lives only in the native API and the
+    // console, so this tool cannot show it.
+    caps: { spend: false, pricing: false, contextLength: false, endpoints: false },
+    // DELIBERATELY UNQUANTIFIED. Google's free-tier limits differ per MODEL and
+    // have changed repeatedly; every figure this file could carry would be a
+    // secondary source going stale. That is the exact mistake the NVIDIA entry
+    // below records having made. `quota` says where the real number lives.
+    limits: {
+      perDay: null, perMinute: null, resets: 'per-model',
+      note: 'Free tier limits are PER MODEL and are not published in a form '
+          + 'this tool can read - a flash model and a pro model on the same key '
+          + 'have very different ceilings, and both have moved. Read yours at '
+          + 'aistudio.google.com, and treat a 429 as the real limit rather than '
+          + 'anything quoted here. Rate-shaped like NVIDIA rather than '
+          + 'daily-capped like OpenRouter free, so a killed pass is cheap to '
+          + 'repeat.',
+    },
+  },
   nvidia: {
     label: 'NVIDIA API Catalog (build.nvidia.com)',
     base: 'https://integrate.api.nvidia.com/v1',
