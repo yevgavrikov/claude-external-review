@@ -247,11 +247,43 @@ request.
    one. Its own README says it is "for personal experimentation and learning,
    not production" — which review work is, so the fit is honest.
 
-**Not verified here.** Everything above is read from its README and the provider
-entry is wired from its documented surface; nobody on this side has run a review
-through it yet. Run the four-step preflight against it like any other provider
-before trusting a pass to it, and the two-line `--expect` probe will tell you in
-seconds whether the wiring is real.
+**VERIFIED 2026-08-28**, and it is the only provider that has passed the whole
+preflight first time:
+
+| | direct provider | via the router |
+|---|---|---|
+| models reachable | 83 listed, most 404/410/429 | **224** |
+| `doctor` | — | exit 0 |
+| `--expect` probe | — | exit 0, first attempt |
+| completed passes that day | **0 across 5 attempts, two machines** | got past the gate immediately |
+
+Run the four-step preflight against it anyway. A green probe certifies one
+REQUEST, not a provider - and the first real pass after that clean probe still
+died, for the reason in the next section.
+
+### The runner can only read under $HOME
+
+A fourth way a pass dies while looking like something else, and it cost twenty
+minutes the first time.
+
+Snapshot the tree somewhere outside `$HOME` - a system temp dir is the obvious
+choice - and the runner lists the files, starts confidently, and then dies with:
+
+    Error: The user rejected permission to use this specific tool call.
+
+Nobody rejected anything. The runner's file-read permission is scoped, and a
+path it does not trust is auto-denied mid-pass, AFTER the model has enumerated
+the tree and produced a plausible opening line. The report is ~80 bytes of
+"I'll start by exploring the repository structure".
+
+**Snapshot to `~/<repo>-review-YYYY-MM-DD/`.** The remote-machine instructions
+already do this for an unrelated reason; it turns out to be load-bearing
+locally too.
+
+The tell that separates it from every other empty-output failure is the phrase
+`rejected permission` in stderr, which is why the completeness check greps for
+it - and why it exits 2 with "THIS RUN DID NOT REVIEW YOUR CODE" rather than
+letting an 80-byte file read as a clean review.
 
 ### A model can be slow, dead, or intermittently both — how to tell
 
