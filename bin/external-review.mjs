@@ -931,6 +931,21 @@ function cmdRun(args) {
   }
 
   const prompt = readFileSync(promptFile, 'utf8');
+
+  // SAY IT BEFORE THE WAIT, not after. The completeness check below can only
+  // fire if the prompt NAMES a section it requires; a prompt that phrases the
+  // requirement some other way silently opts out of its own verification, and
+  // the pass then looks exactly as green as a checked one. Warning here costs
+  // the reader two seconds; discovering it afterwards costs the whole pass.
+  if (demandedHeadings(prompt).length === 0) {
+    console.error(C.y(
+      '\n  NOTE: this prompt names no required section, so the completeness\n' +
+      '  check is INACTIVE for this run. A long answer that stops before the\n' +
+      '  report will be accepted.'));
+    console.error(C.dim(
+      '  To enable it, demand a heading in the prompt - any of:\n' +
+      '    a section "FINDINGS"   |   headed "FINDINGS"   |   End with FINDINGS:\n'));
+  }
   info(`model   ${model}`);
   info(`scope   ${cwd}`);
   info(`output  ${out}`);
@@ -1077,6 +1092,38 @@ function rateLimitWaitSeconds(provider) {
  * findings, and a genuinely short "this subsystem is sound" answer to a short
  * prompt still passes.
  */
+/* Which section headings the PROMPT demands, across the phrasings people
+ * actually write.
+ *
+ * This used to match one literal shape - `headed "X"` - and nothing else. Every
+ * prompt either author actually wrote said `a section "HELD UP"` or
+ * `End with HELD UP:`, so the completeness guard NEVER FIRED, on any pass, for
+ * a whole day of reviews. Each of those passes looked exactly as green as if it
+ * had been checked. A guard that silently does not apply is worse than no
+ * guard, because it is counted as one.
+ *
+ * Kept conservative: an ALL-CAPS token, because that is what section headings
+ * in these prompts look like, and matching ordinary words would fail runs for
+ * saying "summary".
+ */
+function demandedHeadings(prompt) {
+  const pats = [
+    /headed\s+"([A-Z][A-Z ]{2,20})"/g,          // headed "HELD UP"
+    /section\s+(?:called\s+|titled\s+)?"([A-Z][A-Z ]{2,20})"/g, // a section "HELD UP"
+    /\b(?:end|finish|close)\s+with\s+(?:a\s+)?(?:section\s+)?"?([A-Z][A-Z ]{2,20}?)"?\s*[:.]/gi,
+    /^#{1,3}\s+([A-Z][A-Z ]{2,20})\s*$/gm,     // ## HELD UP
+  ];
+  const out = new Set();
+  for (const re of pats) {
+    for (const m of prompt.matchAll(re)) {
+      const h = (m[1] || '').trim();
+      // Guard the loose "end with" pattern: only ALL-CAPS tokens are headings.
+      if (h.length >= 3 && h === h.toUpperCase()) out.add(h);
+    }
+  }
+  return [...out];
+}
+
 function judgeRun(output, prompt) {
   const hints = [
     'If the runner refused to read files: it resolved a different project root.',
@@ -1117,8 +1164,7 @@ function judgeRun(output, prompt) {
   // So: if the prompt DEMANDS a section heading, the output has to contain it.
   // Only headings the prompt actually names are required, which keeps this
   // honest for prompts that ask for something else entirely.
-  const demanded = [...prompt.matchAll(/headed\s+"([A-Z][A-Z ]{2,20})"/g)]
-    .map((m) => m[1]);
+  const demanded = demandedHeadings(prompt);
   const missing = demanded.filter((h) => !output.includes(h));
   if (missing.length) {
     return {

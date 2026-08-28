@@ -54,7 +54,37 @@ volunteers none of them, because nothing asked.
 | auth | already logged in; no key to place | needs a key in env |
 | quota | the vendor's own plan; invisible here | `doctor` / `quota` / `plan` can read or explain it |
 | how to run | invoke its own CLI directly | `external-review run --provider <id>` |
-| the trap | **stdin**: a detached CLI agent that inherits an open stdin hangs at 0% CPU looking exactly like deep thought. Always `< /dev/null` | empty output on 401/429; see the preflight |
+| the trap | **stdin** and **buffering** — see below | empty output on 401/429; see the preflight |
+
+### Local CLI agents fail in the OPPOSITE direction to APIs
+
+Two traps, and the second reverses the advice you would carry over from API
+providers.
+
+**1. stdin.** A detached CLI agent that inherits an open stdin hangs at 0% CPU,
+looking exactly like deep thought. Always `< /dev/null`.
+
+**2. They buffer.** `grok` and `agy` emit their entire output only on
+completion. Kill one with an external timer and you get a **zero-byte file and
+a non-zero exit, after it did all the work** — the same signature as the stdin
+hang, as a 401, and as "found nothing". One reviewer nearly wrote grok off as
+broken when it was merely slower than the timeout wrapping it.
+
+So the rule inverts:
+
+| | API provider | local CLI agent |
+|---|---|---|
+| likely failure | a **hang**, or a silent 429 | a **slow success** |
+| so | bound it, retry it | **do not bound it with an external timer.** Let it finish; poll the output file |
+
+(`timeout` is not on macOS. If you reach for `perl -e 'alarm N; exec @ARGV'` as
+the substitute — that is exactly the wrapper that truncated the run above.)
+
+**3. Tool permissions hang headless runs.** `grok` with tools enabled narrates
+two or three lines and stops dead: it has hit a permission prompt nothing can
+answer. Use `--disallowed-tools` and feed the material inline, or grant explicit
+allow rules. `agy --mode plan` is the better shape — read-only by construction
+rather than by prompt discipline.
 
 Local agents are the ones users forget they have, and they are often the
 LEAST rationed thing available — a subscription CLI has no per-request cost to
@@ -151,7 +181,25 @@ Two shapes of limit, and they call for opposite tactics:
 | | example | how to spend it |
 |---|---|---|
 | **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
-| **rate-capped, unlimited** | NVIDIA: 40 req/min, no credit or daily cap | the workhorse. Pace it, don't ration it — re-running a killed pass costs nothing |
+| **rate-capped** | NVIDIA: published 40 req/min, no daily cap | **measured otherwise — see below.** Re-running a killed pass costs nothing, which is the only reason it is still worth trying |
+
+### NVIDIA: what was actually measured, against what it publishes
+
+**Five attempts, two models, two scope sizes, retry enabled, the key
+uncontended: every one died `429` within about four requests, and not one ever
+produced a report.** Narrowing the scope from 6,093 lines to 2,158 changed
+nothing — the failure lands after the model has read one file, before the review
+starts.
+
+No ceiling is quoted here because **none was ever observed**. What was observed
+is that an agentic reviewer's opening burst exceeds whatever this account gets.
+
+That is the third time this provider's published figures did not survive
+contact: a "1,000 credit" cap that no longer existed, a 40/min rate that a
+standing start cannot reach, and the implication that the free tier is usable
+for review at all. **Treat its numbers as marketing and a 429 as the truth.**
+Try it, because a failed pass costs nothing — but do not plan around it, and
+never make it the only lane.
 
 A number in a blog post is not a limit. This table said NVIDIA gave ~1,000
 credits until a user checked their own console and could not find a balance
