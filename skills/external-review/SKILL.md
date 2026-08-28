@@ -197,53 +197,54 @@ Two shapes of limit, and they call for opposite tactics:
 | | example | how to spend it |
 |---|---|---|
 | **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
-| **rate-capped** | NVIDIA: published 40 req/min, no daily cap | **measured otherwise — see below.** Re-running a killed pass costs nothing, which is the only reason it is still worth trying |
+| **rate-capped** | NVIDIA: published 40 req/min, no daily cap | **the published figure is not what a cold request meets — see below.** Probe with one curl before planning around it |
 
 ### NVIDIA: what was actually measured, against what it publishes
 
-**Five attempts, two models, two scope sizes, retry enabled, the key
-uncontended: every one died `429` within about four requests, and not one ever
-produced a report.** Narrowing the scope from 6,093 lines to 2,158 changed
-nothing — the failure lands after the model has read one file, before the review
-starts.
+Measured twice, independently, by two sessions on two different keys — the
+second time only because an earlier "measurement" here turned out to be an
+explanation nobody had isolated.
 
-No ceiling is quoted here because **none was ever observed**. What was observed
-is that an agentic reviewer's opening burst exceeds whatever this account gets.
+    GET  /v1/models                      -> 200   key valid, endpoint reachable
+    POST /v1/chat/completions
+         deepseek-ai/deepseek-v4-pro     -> 429   in 0.29s, ONE COLD REQUEST
+         moonshotai/kimi-k3              -> 429   in 0.30s
+         meta/llama-3.1-8b-instruct      -> 410   Gone
+         (of 11 ids probed elsewhere: 7x 404, 2x no response in 180s)
 
-That is the third time this provider's published figures did not survive
-contact: a "1,000 credit" cap that no longer existed, a 40/min rate that a
-standing start cannot reach, and the implication that the free tier is usable
-for review at all. **Treat its numbers as marketing and a 429 as the truth.**
-Try it, because a failed pass costs nothing — but do not plan around it, and
-never make it the only lane.
+The 429 carries **no `retry-after` and no `ratelimit-*` headers** — body is
+literally `{"status":429,"title":"Too Many Requests"}`. A real rate limit tells
+you when to return; this does not, which is exactly why it was misread as one.
 
-A number in a blog post is not a limit. This table said NVIDIA gave ~1,000
-credits until a user checked their own console and could not find a balance
-anywhere — NVIDIA had removed the credit cap, and the figure survived only
-because it is repeated everywhere. **Check `plan` against the provider's own
-console before you trust a budget**, including this one.
+Three things follow, and two contradict what this file used to say:
 
-So the default allocation with both configured: **broad discovery on the
-largest budget, adversarial verification on the scarcest one.** Verification
-benefits most from a different lineage anyway, so a small daily allowance is
-worth more there than as a third sweep. `run` warns before it starts a pass the
-daily budget cannot hold; it does not refuse, because a narrow pass is
-legitimate.
+- **A single cold request is enough.** Burst behaviour, scope size and pacing
+  are NOT the variable. Narrowing a scope changes nothing because scope was
+  never involved.
+- **Switching model CAN matter here.** The old line "switching model does not
+  buy a fresh window" is account-rate reasoning, and this is not an account rate
+  window — the responses differ per model, so it behaves like per-model
+  capacity.
+- **The catalog is not a list of servable models.** Most ids that
+  `external-review models` prints return 404 or 410 on chat-completions. Picking
+  one off that list is what the tool tells you to do, and it is not sufficient.
 
-A pass is ~40-150 requests — a measured range from real reviews. Report the
-range, never a single comforting number.
+**So probe one model with one curl before committing a pass to it.** Two
+seconds, and it distinguishes 200 / 429 / 404 / 410 / hang — five states the
+runner reports identically as "the pass failed".
 
-**The per-minute ceiling binds before the daily one, and concurrency multiplies
-it.** An agentic pass BURSTS: it reads many files in quick succession, so the
-average rate is nothing like the peak. Running three passes at once against a
-40/min provider killed TWO of them mid-review — each after the model had read
-most of its subsystem and before it had written anything. Only one finished.
-So: **one pass at a time per provider**, and split further work across providers
-rather than stacking it on one. Note the first version of this paragraph said
-two were safe, written after watching only the first casualty; the second death
-came later in the same run. Guidance from a partial observation is how a
-plausible number outlives the evidence against it. `plan` prints the ceiling; `run` names rate
-limiting explicitly when it happens, because "exited 1" is not actionable.
+```bash
+curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" --max-time 25 \
+  -H "Authorization: Bearer $NVIDIA_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"<id>","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' \
+  https://integrate.api.nvidia.com/v1/chat/completions
+```
+
+No ceiling is quoted here because none was ever observed. Four numbers about
+this provider have now failed to survive contact — a credit cap that did not
+exist, a rate figure a cold request cannot reach, an inferred burst threshold,
+and the implication that a listed model is a servable one.
+
 
 ### Adding a provider
 

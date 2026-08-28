@@ -94,11 +94,14 @@ const PROVIDERS = {
     // is exactly the kind of claim this tool exists to stop making.
     limits: {
       perDay: null, perMinute: 40, resets: 'rate-only',
-      note: 'No credit cap and no daily cap: the free tier is unlimited '
-          + 'requests, capped by RATE. 40/min applies per model AND at the '
-          + 'account level, so switching model does not buy a fresh window. '
-          + 'Increases to 200/min are granted on request in the developer '
-          + 'forums. Plan for PACING, not for rationing.',
+      note: 'PUBLISHED: no credit cap, no daily cap, 40 req/min. MEASURED on '
+          + 'two independent keys: /v1/models returns 200 while a SINGLE COLD '
+          + 'request to chat-completions can return 429 in under a third of a '
+          + 'second, with no retry-after and no ratelimit-* headers - so the '
+          + 'published rate is not what a cold request meets, and pacing does '
+          + 'not help. Responses also differ PER MODEL (429 / 404 / 410 / no '
+          + 'response), so the catalog listing is not a list of servable '
+          + 'models. Probe one model with one curl before committing a pass.',
     },
   },
 };
@@ -877,14 +880,59 @@ function cmdSync(args) {
       .map((f) => `if [ -e "${f}" ]; then echo "LEAKED: ${f}"; fi`)
       .join('; ');
     const out = spawnSync('ssh', [userHost, `cd ${remoteDir} && { ${checks}; } ; echo VERIFY_DONE`], { encoding: 'utf8' });
-    const leaked = (out.stdout || '').split('\n').filter((l) => l.startsWith('LEAKED:'));
-    if (leaked.length) {
+    const verdict = verifySyncVerdict(out);
+    if (verdict.leaked.length) {
       console.error(C.r('\nSecrets reached the review copy:'));
-      leaked.forEach((l) => console.error(`  ${l}`));
+      verdict.leaked.forEach((l) => console.error(`  ${l}`));
       die('delete the remote copy and re-sync with the right --exclude flags');
+    }
+    // FAIL CLOSED. "No LEAKED lines" is only evidence when the check actually
+    // RAN. An unreachable host, a refused key, a wrong remote dir or a missing
+    // ssh binary all produce empty stdout - which used to print the same green
+    // "verified" as a clean copy. The command then told you your secrets were
+    // absent from a machine it had never successfully reached.
+    //
+    // VERIFY_DONE was already being echoed for exactly this purpose and was
+    // never checked. That is the marker; ssh's own status is the second half.
+    if (!verdict.ran) {
+      console.error(C.r('\n  VERIFICATION DID NOT RUN - this is not a clean result.'));
+      console.error(C.y(`  ${verdict.why}`));
+      console.error(C.dim(
+        '  The copy may be fine, but nothing here has looked at it. Re-run the\n' +
+        '  check, or delete the remote copy if you cannot.\n'));
+      die('could not verify the review copy');
     }
     console.log(C.g('\n  verified: no excluded path is present in the copy\n'));
   }
+}
+
+/* Did the remote verification actually run, and what did it see?
+ *
+ * Split out as a pure function because the interesting case has no remote host:
+ * ssh failing produces the SAME empty stdout as a clean copy, and the caller
+ * used to read that silence as proof. Anything that is not an ssh exit 0 with
+ * the VERIFY_DONE marker present means the check did not happen.
+ */
+function verifySyncVerdict(out) {
+  const stdout = out?.stdout || '';
+  const leaked = stdout.split('\n').filter((l) => l.startsWith('LEAKED:'));
+  if (out?.error) {
+    return { ran: false, leaked, why: `ssh could not be run: ${out.error.message}` };
+  }
+  if (out?.status !== 0) {
+    const err = (out?.stderr || '').trim().split('\n').slice(-1)[0] || '';
+    return {
+      ran: false, leaked,
+      why: `ssh exited ${out?.status}${err ? ` - ${err}` : ''}`,
+    };
+  }
+  if (!stdout.includes('VERIFY_DONE')) {
+    return {
+      ran: false, leaked,
+      why: 'the remote check did not report completion (no VERIFY_DONE marker)',
+    };
+  }
+  return { ran: true, leaked, why: '' };
 }
 
 function splitDest(dest) {

@@ -696,3 +696,27 @@ test('a required section that is EMPTY is not a passing review', () => {
   assert.equal(verdict.ok, false, 'a heading with no body must not pass');
   assert.match(verdict.why, /EMPTY|empty/);
 });
+
+test('sync verification fails CLOSED when the check could not run', () => {
+  // "No LEAKED lines" is only evidence when the check actually ran. An
+  // unreachable host, a refused key, a wrong remote dir or a missing ssh binary
+  // all produce empty stdout - which used to print the same green "verified" as
+  // a genuinely clean copy, telling you your secrets were absent from a machine
+  // nothing had reached. VERIFY_DONE was already echoed for this purpose and
+  // was never checked.
+  const fn = src.match(/function verifySyncVerdict[\s\S]*?\n}\n/)[0];
+  const verifySyncVerdict = new Function(`${fn}; return verifySyncVerdict;`)();
+
+  assert.equal(verifySyncVerdict({ status: 255, stdout: '', stderr: 'Connection refused' }).ran,
+    false, 'ssh failing must not read as verified');
+  assert.equal(verifySyncVerdict({ error: new Error('spawn ssh ENOENT'), stdout: '' }).ran,
+    false, 'a missing ssh binary must not read as verified');
+  assert.equal(verifySyncVerdict({ status: 0, stdout: 'some noise\n' }).ran,
+    false, 'exit 0 without the completion marker must not read as verified');
+  assert.equal(verifySyncVerdict({ status: 0, stdout: 'VERIFY_DONE\n' }).ran,
+    true, 'a completed check with no leaks is the ONLY passing case');
+  // And a real leak is still reported when the check did run.
+  const leaky = verifySyncVerdict({ status: 0, stdout: 'LEAKED: .env\nVERIFY_DONE\n' });
+  assert.equal(leaky.ran, true);
+  assert.deepEqual(leaky.leaked, ['LEAKED: .env']);
+});
