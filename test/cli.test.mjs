@@ -636,3 +636,63 @@ test('a spent daily allowance is not reported as a billing problem', () => {
   assert.doesNotMatch(r.stderr, /re-attempting/,
     '--retry must NOT sleep for hours on this one');
 });
+
+// ---------------------------------------------------------------------------
+// Guards added after a review of this tool found that several of its own
+// checks could not fire. Each test below pins a check that was previously
+// decorative: it printed, or it matched one literal phrasing, and an
+// unattended caller could not tell the difference from success.
+
+test('doctor exits non-zero when a check fails, not just prose', () => {
+  // `doctor && run` is the natural chain. A doctor that says "Some checks want
+  // attention" while exiting 0 lets that chain walk into a pass that cannot work.
+  const r = spawnSync('node', [BIN, 'doctor', '--provider', 'nvidia'], {
+    encoding: 'utf8',
+    env: { ...process.env, NO_COLOR: '1', NVIDIA_API_KEY: '', NVIDIA_NIM_API_KEY: '' },
+  });
+  assert.match(r.stdout, /API key found/);
+  assert.notEqual(r.status, 0, 'a failed check must be visible in the exit status');
+});
+
+test('the heading matcher recognises the phrasings people actually write', () => {
+  // It used to match `headed "X"` and nothing else, while every prompt written
+  // in practice said `a section "X"` or `End with X:` - so the completeness
+  // check silently never applied, and those passes looked exactly as green as
+  // checked ones.
+  const fn = src.match(/function demandedHeadings[\s\S]*?\n}\n/)[0];
+  const demandedHeadings = new Function(`${fn}; return demandedHeadings;`)();
+  for (const phrasing of [
+    'Finish with a section "HELD UP" listing what held up',
+    'End with HELD UP: three things',
+    'a section headed "HELD UP"',
+    '## HELD UP',
+  ]) {
+    assert.deepEqual(demandedHeadings(phrasing), ['HELD UP'], `missed: ${phrasing}`);
+  }
+  assert.deepEqual(demandedHeadings('no directive here at all'), [],
+    'a prompt with no section directive must report none, so run can warn');
+});
+
+test('run --expect is documented, so a preflight can be branched on', () => {
+  assert.match(run([]), /--expect/,
+    'an unattended agent needs a mechanical preflight assertion, not "read the file"');
+});
+
+test('a required section that is EMPTY is not a passing review', () => {
+  const fn = src.match(/function judgeRun[\s\S]*?\n}\n/)[0];
+  const deps = src.match(/function demandedHeadings[\s\S]*?\n}\n/)[0];
+  const judgeRun = new Function(`${deps}; ${fn}; return judgeRun;`)();
+  const prompt = 'Report every defect. Finish with a section "HELD UP" listing what held up.'
+    .padEnd(400, ' ');
+  // The REAL shape of this failure: plenty of thinking-aloud, then the required
+  // headings with nothing under them, because the model ran out of room before
+  // writing the report. Long enough to clear the too-short gate, which is what
+  // makes it dangerous - `includes()` alone called this a review.
+  const hollow =
+    'Let me start by reading the store. I will look at the merge lane next. '
+      .repeat(20) +
+    '\n\n## FINDINGS\n\n## HELD UP\n';
+  const verdict = judgeRun(hollow, prompt);
+  assert.equal(verdict.ok, false, 'a heading with no body must not pass');
+  assert.match(verdict.why, /EMPTY|empty/);
+});

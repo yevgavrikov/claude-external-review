@@ -290,7 +290,12 @@ async function cmdDoctor(args = []) {
       '  limits are and where the only real number lives.'));
   }
 
+  // EXIT CODE, not just prose. `doctor && run` is the natural thing to write,
+  // and a doctor that prints "Some checks want attention" while exiting 0 lets
+  // that chain proceed into a pass that cannot work. Unattended callers branch
+  // on status, not on adjectives.
   console.log(bad ? C.y('\nSome checks want attention.\n') : C.g('\nReady.\n'));
+  process.exitCode = bad ? 1 : 0;
 }
 
 function findRunner() {
@@ -937,7 +942,10 @@ function cmdRun(args) {
   // requirement some other way silently opts out of its own verification, and
   // the pass then looks exactly as green as a checked one. Warning here costs
   // the reader two seconds; discovering it afterwards costs the whole pass.
-  if (demandedHeadings(prompt).length === 0) {
+  // A preflight prompt legitimately demands no sections - it demands one exact
+  // sentence - so --expect suppresses the warning below rather than fighting it.
+  const expect = argValue(args, '--expect');
+  if (!expect && demandedHeadings(prompt).length === 0) {
     console.error(C.y(
       '\n  NOTE: this prompt names no required section, so the completeness\n' +
       '  check is INACTIVE for this run. A long answer that stops before the\n' +
@@ -960,13 +968,38 @@ function cmdRun(args) {
 
   const attempt = (retriesLeft) => {
   const child = spawn(runner, ['run', ...dirFlag, '-m', model, prompt], {
-    cwd, stdio: ['ignore', 'pipe', 'inherit'],
+    // stderr is PIPED, not inherited, and re-emitted below. Inheriting it meant
+    // the rate-limit and server-error classification below only ever saw
+    // stdout - and runners put exactly those errors on stderr, so the most
+    // common real failure was reported as a generic "exited 1". Streaming it
+    // on keeps it usable as the liveness signal.
+    cwd, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let buf = '';
+  let errBuf = '';
   child.stdout.on('data', (d) => { buf += d; process.stdout.write(d); });
-  child.on('close', (code) => {
+  child.stderr.on('data', (d) => { errBuf += d; process.stderr.write(d); });
+  child.on('close', (code, signal) => {
     writeFileSync(out, buf);
+    // Classify against BOTH streams: which one carries the error is the
+    // runner's choice, not ours.
+    const both = `${buf}\n${errBuf}`;
     const verdict = judgeRun(buf, prompt);
+
+    // KILLED IS NOT FINISHED, and it used to exit 0. Node reports a signalled
+    // death as code === null, `null !== 0` took the error branch, and
+    // `process.exit(null)` then exited ZERO - a truncated pass reported as a
+    // clean one. Worse for a buffering runner, which emits everything at the
+    // end: killing it yields an empty file after it did all the work.
+    if (signal) {
+      console.error(C.r(`\nrunner was KILLED by ${signal} - this pass did not finish.`));
+      console.error(C.y(`  Partial output (may be empty) kept at ${out}`));
+      console.error(C.dim(
+        '  If you wrapped it in a timeout: do not. Some runners buffer their\n' +
+        '  whole output and emit it only on completion, so killing one throws\n' +
+        '  away work that was already done. Let it finish and poll the file.\n'));
+      process.exit(4);
+    }
     if (code !== 0) {
       console.error(C.y(`\nrunner exited ${code}; partial output in ${out}`));
       // "exited 1" is not actionable; "you were rate limited" is. This is the
@@ -977,7 +1010,7 @@ function cmdRun(args) {
       // separate from the rate-limit branch because the ADVICE differs: there
       // is no window to wait out, so a short pause and a different model are
       // the useful suggestions.
-      if (/\b5\d\d\b.*(server error|unexpected)|unexpected server error/i.test(buf)) {
+      if (/\b5\d\d\b.*(server error|unexpected)|unexpected server error/i.test(both)) {
         console.error(C.y(
           `\n  ${provider.label} returned a SERVER ERROR, not a refusal.`));
         console.error(C.dim(
@@ -998,7 +1031,7 @@ function cmdRun(args) {
       // to wait out and no burst to blame - and it is not a billing problem
       // either, which is what the words "payment required" will make a reader
       // assume. It clears at the UTC day boundary like any daily cap.
-      if (/\b402\b|payment_required|payment required/i.test(buf)) {
+      if (/\b402\b|payment_required|payment required/i.test(both)) {
         const wait = rateLimitWaitSeconds({ limits: { resets: 'utc-day' } });
         console.error(C.y(
           `\n  DAILY FREE ALLOWANCE SPENT on ${provider.label}.`));
@@ -1012,7 +1045,7 @@ function cmdRun(args) {
         // Never auto-retry this one: --retry would sleep for hours.
         process.exit(3);
       }
-      if (/\b429\b|too many requests|rate.?limit/i.test(buf)) {
+      if (/\b429\b|too many requests|rate.?limit/i.test(both)) {
         const wait = rateLimitWaitSeconds(provider);
         console.error(C.y(
           `\n  RATE LIMITED by ${provider.label}` +
@@ -1041,6 +1074,21 @@ function cmdRun(args) {
         process.exit(3);
       }
       process.exit(code);
+    }
+    // --expect turns the preflight into something an unattended agent can BRANCH
+    // on. "Run it and read the file" is not a check; a human reads a file, a
+    // script needs a status. Exit 5 is distinct so a failed preflight is never
+    // confused with a failed review.
+    if (expect) {
+      const norm = (t) => t.replace(/\s+/g, ' ').trim();
+      if (norm(buf).includes(norm(expect))) {
+        console.error(C.g(`\npreflight OK - the model answered as instructed.`));
+        process.exit(0);
+      }
+      console.error(C.r(`\nPREFLIGHT FAILED: the output does not contain ${JSON.stringify(expect)}.`));
+      console.error(C.y('  The setup is not usable yet; do not start a real pass.'));
+      console.error(C.dim(`  What came back is at ${out}\n`));
+      process.exit(5);
     }
     if (verdict.ok) {
       console.error(C.g(`\nwrote ${out}`));
@@ -1166,6 +1214,34 @@ function judgeRun(output, prompt) {
   // honest for prompts that ask for something else entirely.
   const demanded = demandedHeadings(prompt);
   const missing = demanded.filter((h) => !output.includes(h));
+  // A HEADING IS NOT A SECTION. A pass can print the required headings and stop,
+  // or emit them with nothing underneath, and `includes()` calls that a pass.
+  // Require some substance after each one - not a lot, because "this subsystem
+  // is sound" is a legitimate one-line answer, but more than the heading itself.
+  const hollow = demanded.filter((h) => {
+    const i = output.indexOf(h);
+    if (i < 0) return false; // already counted as missing
+    const after = output.slice(i + h.length).replace(/^[\s:#*_-]+/, '');
+    // Stop at the next demanded heading so one full section cannot mask an
+    // empty one that follows it.
+    const nextAt = demanded
+      .map((o) => (o === h ? -1 : after.indexOf(o)))
+      .filter((n) => n > 0);
+    const body = (nextAt.length ? after.slice(0, Math.min(...nextAt)) : after).trim();
+    return body.length < 40;
+  });
+  if (!missing.length && hollow.length) {
+    return {
+      ok: false,
+      why: `These required sections are present but EMPTY: ${hollow.join(', ')}. ` +
+           'A heading with nothing under it is a report that stopped, not a ' +
+           'review that found nothing.',
+      hints: [
+        'Re-run: this is usually the model running out of room mid-report.',
+        'A narrower scope leaves more room for the findings themselves.',
+      ],
+    };
+  }
   if (missing.length) {
     return {
       ok: false,
@@ -1470,6 +1546,7 @@ ${C.b('Commands')}
   sync --to HOST:DIR         copy your source to a review machine, secrets
        [--from DIR] [--exclude PATH]   excluded — then VERIFY they are absent
   run --prompt FILE --model ID [--in DIR] [--out FILE] [--retry N]
+      [--expect TEXT]        preflight: require this exact answer
 
 ${C.b('Providers')}
   Every command takes ${C.c('--provider <id>')} (or $EXTERNAL_REVIEW_PROVIDER).

@@ -159,12 +159,28 @@ review at the time of writing:
 ```bash
 echo "Reply with exactly: PREFLIGHT OK" > /tmp/p.txt
 external-review run --provider <id> --model <id> --prompt /tmp/p.txt \
-  --in <one small dir> --out /tmp/pre.md && cat /tmp/pre.md
+  --in <one small dir> --out /tmp/pre.md --expect "PREFLIGHT OK"
+echo "exit $?"     # 0 = usable. 5 = the model did not answer. Do not proceed.
 ```
 
-A two-line answer costs one request and converts every setup failure above into
-a 10-second one. **An empty output file is the signature of all of them**, and
-it is indistinguishable from "the review found nothing" if you skip this.
+`--expect` is what makes this a CHECK rather than a thing to read. It exits **5**
+on failure, distinct from a failed review, so an unattended agent can branch
+instead of eyeballing a file. One request converts every setup failure above
+into a 10-second one.
+
+**An empty output file is the signature of all of them**, and it is
+indistinguishable from "the review found nothing" if you skip this.
+
+The exit codes the tool guarantees, for a caller that has to branch:
+
+| exit | meaning | what to do |
+|---|---|---|
+| 0 | reviewed, report written | read the findings |
+| 2 | **did not review your code** - refused, too short, or a required section empty | read `why`, fix, re-run |
+| 3 | rate-limited or upstream 5xx | honour `RETRY_AFTER_SECONDS=N` on stderr |
+| 4 | **killed by a signal** - did not finish | do not retry blindly; stop bounding it with a timer |
+| 5 | `--expect` not satisfied | setup is not usable; do not start a real pass |
+
 
 **Never background a pass with bare `nohup … &` from a shell that then exits.**
 The run dies with its parent, leaving a zero-byte report and no error — the same
