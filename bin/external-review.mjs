@@ -1022,11 +1022,43 @@ function cmdRun(args) {
     // common real failure was reported as a generic "exited 1". Streaming it
     // on keeps it usable as the liveness signal.
     cwd, stdio: ['ignore', 'pipe', 'pipe'],
+    // Own process group, so an idle timeout can take the runner's children
+    // with it rather than orphaning them holding the pipes.
+    detached: true,
   });
   let buf = '';
   let errBuf = '';
-  child.stdout.on('data', (d) => { buf += d; process.stdout.write(d); });
-  child.stderr.on('data', (d) => { errBuf += d; process.stderr.write(d); });
+
+  // IDLE timeout, not a wall-clock one, and OFF unless asked for.
+  //
+  // A model can accept the request and never answer - measured on a provider
+  // whose own web playground hung on the same model, with no error and no
+  // close. The runner then waits forever and an unattended caller waits with
+  // it. But a blanket timer is the wrong fix: some local CLI agents buffer
+  // their entire output and emit it only on completion, so killing one on
+  // elapsed time throws away work that was already done.
+  //
+  // So this fires only when NEITHER stream has produced a byte for the whole
+  // window. A healthy agentic pass writes to stderr almost continuously (it
+  // logs each file it opens), which is what makes silence on both streams a
+  // usable signal rather than a guess.
+  const idleSeconds = Number(argValue(args, '--idle-timeout') ?? 0);
+  let idleTimer = null;
+  let timedOut = false;
+  const bump = () => {
+    if (!idleSeconds) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      // Kill the group: the runner spawns children of its own, and killing
+      // only the parent leaves them holding the pipes.
+      try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+    }, idleSeconds * 1000);
+  };
+  bump();
+
+  child.stdout.on('data', (d) => { buf += d; process.stdout.write(d); bump(); });
+  child.stderr.on('data', (d) => { errBuf += d; process.stderr.write(d); bump(); });
   child.on('close', (code, signal) => {
     writeFileSync(out, buf);
     // Classify against BOTH streams: which one carries the error is the
@@ -1039,6 +1071,18 @@ function cmdRun(args) {
     // `process.exit(null)` then exited ZERO - a truncated pass reported as a
     // clean one. Worse for a buffering runner, which emits everything at the
     // end: killing it yields an empty file after it did all the work.
+    clearTimeout(idleTimer);
+    if (timedOut) {
+      console.error(C.r(
+        `\nNO OUTPUT ON EITHER STREAM FOR ${idleSeconds}s - treated as a hang.`));
+      console.error(C.y('  The model accepted the request and never answered.'));
+      console.error(C.dim(
+        '  This is usually the MODEL, not you: providers serve some ids and\n' +
+        '  quietly fail others, and a listing does not tell you which. Probe a\n' +
+        '  different model with one request before re-running this scope.\n' +
+        `  Whatever arrived is at ${out}\n`));
+      process.exit(6);
+    }
     if (signal) {
       console.error(C.r(`\nrunner was KILLED by ${signal} - this pass did not finish.`));
       console.error(C.y(`  Partial output (may be empty) kept at ${out}`));
@@ -1595,6 +1639,7 @@ ${C.b('Commands')}
        [--from DIR] [--exclude PATH]   excluded — then VERIFY they are absent
   run --prompt FILE --model ID [--in DIR] [--out FILE] [--retry N]
       [--expect TEXT]        preflight: require this exact answer
+      [--idle-timeout SECS]  give up if BOTH streams go silent that long
 
 ${C.b('Providers')}
   Every command takes ${C.c('--provider <id>')} (or $EXTERNAL_REVIEW_PROVIDER).

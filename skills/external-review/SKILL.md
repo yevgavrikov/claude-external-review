@@ -199,6 +199,60 @@ Two shapes of limit, and they call for opposite tactics:
 | **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
 | **rate-capped** | NVIDIA: published 40 req/min, no daily cap | **the published figure is not what a cold request meets — see below.** Probe with one curl before planning around it |
 
+### A model can be slow, dead, or intermittently both — how to tell
+
+Measured across two keys and two machines, same provider, same day:
+
+| model | result | time to first byte |
+|---|---|---|
+| `google/diffusiongemma-26b-a4b-it` | **200, real content** | **51.6s** on one key, **0.86s** on another |
+| `deepseek-v4-pro-0813` | no response at all | >120s, gave up |
+| `deepseek-v4-flash-0731` | no response at all | >100s, gave up |
+| `moonshotai/kimi-k3` | 429 | 0.32s |
+
+And the same model, same prompt, same key, back to back: **hang / 200 in 0.86s /
+200 in 4.99s**, with the hang tracking nothing in the request. On an earlier run
+the pattern inverted. So latency is not a property of the model you can learn
+once.
+
+Four rules follow, and each was learned by getting it wrong:
+
+**1. Set timeouts in MINUTES, not seconds.** A `--max-time 25` probe reported a
+working model as a hang, and that false negative became a published claim. 51
+seconds to first byte was a *healthy* response. If you bound a request at all,
+bound it well past the slowest success you have seen, not past your patience.
+
+**2. A single green probe does not certify a model.** It certifies that one
+request. A pass that preflights clean can still hang on request forty — so
+`--retry` is not optional with a provider like this, it is the mechanism.
+
+**3. Assert non-empty CONTENT, not status 200.** A probe that checks the status
+and prints whatever the content extraction returned will happily report a usable
+model while printing nothing. Look at `choices[0].message.content` and require
+it to be non-empty. This is the vacuity rule pointed at your own tooling: a
+check that cannot fail is not a check.
+
+**4. The web playground and the API are different paths.** One provider's
+playground answered in 45s on a model whose API call had not returned after 120.
+So "it works in the browser" does not mean the API will serve it, and a vendor's
+own availability badge can read "Available" for both while only one is true.
+
+### When the model just never answers
+
+`run --idle-timeout SECONDS` gives up when **neither stdout nor stderr** has
+produced a byte for that long, kills the process group, keeps whatever arrived,
+and exits **6** — distinct from a killed run (4) or a failed review (2).
+
+It is **off by default and idle-based on purpose.** A wall-clock timer is the
+wrong tool: local CLI agents buffer their whole output and emit it on
+completion, so elapsed-time kills throw away work that was already done. Silence
+on *both* streams is the signal, because a healthy agentic pass writes to stderr
+almost continuously — it logs each file it opens.
+
+Given rule 1, set it generously: **600s is a reasonable floor** for an API
+provider, and leave it off entirely for a local CLI unless you know that runner
+emits progress.
+
 ### NVIDIA: what was actually measured, against what it publishes
 
 Measured twice, independently, by two sessions on two different keys — the
