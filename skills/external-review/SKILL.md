@@ -34,10 +34,50 @@ documented intentions.
 
 ## Before you run anything
 
+**Run these four in order. Do not skip to `run`.** Each catches a failure that
+otherwise appears 20 minutes in, as an empty report.
+
 ```bash
-external-review doctor     # is a key present, is a runner installed
-external-review plan       # how many passes fit, across every provider you have
+external-review doctor --provider <id>     # 1. key works AND runner is configured
+external-review runner-config --provider <id> --write   # 2. only if doctor flags it
+external-review plan                       # 3. how many passes actually fit
+external-review models --provider <id>     # 4. exact model ids for this catalog
 ```
+
+**1 and 2 are the pair that bites.** "Key present" and "runner configured" are
+DIFFERENT claims. opencode knows OpenRouter natively and nothing else: without a
+provider block it accepts your model id, sends no auth header, and the run dies
+`Unauthorized: Header of type authorization was missing` — after the snapshot,
+the prompt and the wait. `doctor` now checks both; if it flags the runner, run
+`runner-config --write` and **restart the runner**, which does not reload
+providers while up.
+
+**4 matters because model ids must match the catalog EXACTLY.** A near-miss id
+is accepted and then fails at request time. Some catalogs (NVIDIA) publish ids
+ONLY — no context window, no pricing — so ranking by context is impossible
+there and a known-good id is worth more than a search. Proven on Dart/Flutter
+review at the time of writing:
+
+| provider | model | notes |
+|---|---|---|
+| NVIDIA | `deepseek-ai/deepseek-v4-pro-0813` | found a real P1 in a 27-file pass; strong `HELD UP` section |
+| OpenRouter | any large-context free model from `models --free` | ranked by context, which OpenRouter does publish |
+
+**Then prove it end to end before the real pass**, with a throwaway scope:
+
+```bash
+echo "Reply with exactly: PREFLIGHT OK" > /tmp/p.txt
+external-review run --provider <id> --model <id> --prompt /tmp/p.txt \
+  --in <one small dir> --out /tmp/pre.md && cat /tmp/pre.md
+```
+
+A two-line answer costs one request and converts every setup failure above into
+a 10-second one. **An empty output file is the signature of all of them**, and
+it is indistinguishable from "the review found nothing" if you skip this.
+
+**Never background a pass with bare `nohup … &` from a shell that then exits.**
+The run dies with its parent, leaving a zero-byte report and no error — the same
+empty file, a third way. Keep the shell alive, or use `setsid`.
 
 **Run `plan` before choosing scopes, not after.** It reads each provider's
 published limits and reports how many whole-subsystem passes actually fit. The

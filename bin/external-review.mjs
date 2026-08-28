@@ -213,6 +213,27 @@ async function cmdDoctor(args = []) {
   const runner = findRunner();
   check(!!runner, 'a runner is installed', runner || 'install one: npm i -g opencode-ai');
 
+  // INSTALLED IS NOT CONFIGURED, and conflating them is the failure this whole
+  // command exists to prevent. opencode knows OpenRouter natively and nothing
+  // else; without a provider block it accepts the model id, sends no auth
+  // header, and the run dies with `Unauthorized: Header of type authorization
+  // was missing` — AFTER the snapshot, the prompt and the wait. A doctor that
+  // says "Ready" here has told you the key works and let you believe the run
+  // will.
+  if (runner) {
+    const knows = runnerKnowsProvider(process.cwd(), provider.id);
+    check(knows, 'runner is configured for this provider',
+      knows
+        ? (provider.id === 'openrouter' ? 'native to opencode' : 'declared in opencode.json')
+        : 'NOT declared — the run will 401 even though the key above works');
+    if (!knows) {
+      console.log(C.dim(
+        `\n  Fix, then restart the runner (it does not reload providers while up):\n` +
+        `    external-review runner-config --provider ${provider.id} --write\n` +
+        `    export ${provider.env[0]}=…\n`));
+    }
+  }
+
   for (const tool of ['rsync', 'ssh']) {
     const ok = spawnSync('which', [tool]).status === 0;
     check(ok, `${tool} available`, ok ? '' : 'needed only for the remote-machine workflow');
