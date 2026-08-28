@@ -261,29 +261,45 @@ Run the four-step preflight against it anyway. A green probe certifies one
 REQUEST, not a provider - and the first real pass after that clean probe still
 died, for the reason in the next section.
 
-### The runner can only read under $HOME
+### A headless runner auto-rejects its own permission prompts
 
-A fourth way a pass dies while looking like something else, and it cost twenty
-minutes the first time.
+The most disguised failure yet, and my first diagnosis of it was wrong - worth
+recording both because the wrong one is the tempting one.
 
-Snapshot the tree somewhere outside `$HOME` - a system temp dir is the obvious
-choice - and the runner lists the files, starts confidently, and then dies with:
+The runner lists the files, starts confidently, and then dies with:
 
     Error: The user rejected permission to use this specific tool call.
 
-Nobody rejected anything. The runner's file-read permission is scoped, and a
-path it does not trust is auto-denied mid-pass, AFTER the model has enumerated
-the tree and produced a plausible opening line. The report is ~80 bytes of
-"I'll start by exploring the repository structure".
+**Nobody rejected anything.** opencode asks for permission on some tool calls,
+and in a headless run there is no one to answer, so it denies. The report is
+~80 bytes of "I'll start by exploring the repository structure".
 
-**Snapshot to `~/<repo>-review-YYYY-MM-DD/`.** The remote-machine instructions
-already do this for an unrelated reason; it turns out to be load-bearing
-locally too.
+**The fix is a permission block, not a path.** In `~/.config/opencode/opencode.json`:
 
-The tell that separates it from every other empty-output failure is the phrase
-`rejected permission` in stderr, which is why the completeness check greps for
-it - and why it exits 2 with "THIS RUN DID NOT REVIEW YOUR CODE" rather than
-letting an 80-byte file read as a clean review.
+```json
+"permission": { "edit": "deny", "bash": "allow", "webfetch": "deny" }
+```
+
+Read-only by construction, which is what a review wants anyway - and it removes
+the prompt that had nothing to answer it.
+
+**The wrong diagnosis, recorded so nobody repeats it.** The first failure had the
+snapshot in a system temp dir, so "the runner cannot read outside `$HOME`" fit
+perfectly. Moving it to `~/<repo>-review-YYYY-MM-DD/` even *appeared* to work -
+zero rejections in the first 40 seconds - and that observation was written up as
+the fix. It was not: the same rejection arrived later in the pass, once the model
+reached a file needing a paged read. One clean early sample is not a result, and
+"it got further" is not "it worked".
+
+Two other things that surfaced alongside it, both worth doing:
+
+- **Snapshot enough to compile against.** The model asked for `lib/core/health.dart`,
+  `lib/core/theme.dart` and `pubspec.yaml` - files the scope did not include -
+  and got `File not found`. A scope narrow enough to be cheap can be too narrow
+  to reason about. Include the types the reviewed code depends on.
+- `~/<repo>-review-YYYY-MM-DD/` is still the right place for a snapshot, for the
+  reason the remote instructions already give: never review a tree you are
+  editing. It just is not the fix for this.
 
 ### A model can be slow, dead, or intermittently both — how to tell
 
