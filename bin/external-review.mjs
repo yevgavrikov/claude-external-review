@@ -47,6 +47,29 @@ const PROVIDERS = {
           + 'is listed, it is the only way to get a long day out of a free account.',
     },
   },
+  freellmapi: {
+    label: 'FreeLLMAPI (local router)',
+    // A router you run yourself. Your prompts go from your machine to whichever
+    // upstream it routes to; they do not pass through the project's servers.
+    base: 'http://localhost:3001/v1',
+    env: ['FREELLMAPI_API_KEY'],
+    authStoreKey: 'freellmapi',
+    hint: 'start it (freellmapi.co) and copy the unified token from its Keys page',
+    runnerPrefix: 'freellmapi/',
+    caps: { spend: false, pricing: false, contextLength: false, endpoints: false },
+    limits: {
+      perDay: null, perMinute: null, resets: 'per-upstream',
+      note: 'A ROUTER, not a provider: it fronts many upstream free tiers behind '
+          + 'one OpenAI-compatible endpoint and fails over on 429/5xx, which is '
+          + 'the single most useful property for review work - the failure that '
+          + 'kills a pass is one model going dark mid-run. Its limits are '
+          + 'therefore the UNION of whatever you enabled upstream, and this tool '
+          + 'cannot read them. The catch is the other side of the same coin: '
+          + 'failover means you may not know WHICH provider served a given pass, '
+          + 'so route only code you would send to the WEAKEST-permissioned '
+          + 'upstream you have enabled.',
+    },
+  },
   google: {
     label: 'Google AI Studio (Gemini)',
     // Google publishes an OpenAI-COMPATIBLE surface alongside its native API.

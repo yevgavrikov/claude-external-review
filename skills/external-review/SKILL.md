@@ -199,6 +199,60 @@ Two shapes of limit, and they call for opposite tactics:
 | **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
 | **rate-capped** | NVIDIA: published 40 req/min, no daily cap | **the published figure is not what a cold request meets — see below.** Probe with one curl before planning around it |
 
+### A local router is the best answer to "which model works today"
+
+Everything above — probe until one returns 200, retry, set generous timeouts —
+is manual failover. A router does it for you, and it is the single highest-value
+addition to this workflow.
+
+**[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** (MIT, ~21k stars,
+actively maintained) fronts many providers' free tiers behind ONE
+OpenAI-compatible endpoint and **fails over automatically on 429 and 5xx**,
+tracking per-key usage to stay under each upstream's cap.
+
+    curl -fsSL https://freellmapi.co/install.sh | bash   # docker, ~/freellmapi
+    # then: dashboard -> Keys -> copy the unified token
+
+    export FREELLMAPI_API_KEY=<that token>
+    external-review runner-config --provider freellmapi --write
+    external-review doctor --provider freellmapi
+
+It serves `http://localhost:3001/v1` with `/chat/completions` and `/models`, so
+it needs no special support — it is just another provider here.
+
+**Why it matters for review specifically:** the failure that kills a pass is one
+model going dark mid-run, twenty minutes in, after the snapshot and the prompt.
+Every other mitigation in this file is you doing by hand what a router does per
+request.
+
+#### Four things to know before you point your code at it
+
+1. **It is self-hosted, and that is the point.** Your keys live in a local
+   encrypted SQLite; prompts go from your machine to the upstream. Nothing is
+   proxied through the project's servers. That is what makes it viable for code
+   you would not paste into a web app.
+2. **It does not launder upstream terms.** Routing NVIDIA traffic through a
+   local router does not dissolve NVIDIA's "no confidential data" clause. The
+   router changes the plumbing, not the agreement. **Route only code you would
+   send to the WEAKEST-permissioned upstream you have enabled** — because with
+   failover on, you often cannot say afterwards which one served it.
+3. **That uncertainty is a real cost, not a nitpick.** This file's whole
+   discipline is knowing what you sent where. A router trades that away for
+   reliability. Worth it for open-source or your own product's code; not worth
+   it for anything under NDA. If you need to know the provider, disable failover
+   or call that provider directly.
+4. **Concentration and install shape.** All your provider keys end up in one
+   local database, and setup is `curl | bash` plus Docker. Both are ordinary for
+   developer tooling and both are worth a deliberate yes rather than a reflex
+   one. Its own README says it is "for personal experimentation and learning,
+   not production" — which review work is, so the fit is honest.
+
+**Not verified here.** Everything above is read from its README and the provider
+entry is wired from its documented surface; nobody on this side has run a review
+through it yet. Run the four-step preflight against it like any other provider
+before trusting a pass to it, and the two-line `--expect` probe will tell you in
+seconds whether the wiring is real.
+
 ### A model can be slow, dead, or intermittently both — how to tell
 
 Measured across two keys and two machines, same provider, same day:
