@@ -180,7 +180,18 @@ The exit codes the tool guarantees, for a caller that has to branch:
 | 3 | rate-limited or upstream 5xx | honour `RETRY_AFTER_SECONDS=N` on stderr |
 | 4 | **killed by a signal** - did not finish | do not retry blindly; stop bounding it with a timer |
 | 5 | `--expect` not satisfied | setup is not usable; do not start a real pass |
+| 7 | **the model is not served here** (404/410) | PERMANENT - pick another id; retrying cannot succeed |
 
+
+**Exit 7 exists because the runner LAUNDERS the status.** opencode reports a
+withdrawn NVIDIA model - a hard 410 - as
+`{"name":"UnknownError","message":"Unexpected server error"}`, so stderr cannot
+be parsed to tell "the host fell over" (retry) from "this id does not exist"
+(never retry). `run` therefore sends one 1-token probe when a pass dies with an
+ambiguous server error, and reports which it actually was. A sibling repo lost
+three passes to that collapse - waiting, re-running, re-running again against an
+id that answers 404 and always will - while a healthy model in the same catalog
+went untried.
 
 **Never background a pass with bare `nohup … &` from a shell that then exits.**
 The run dies with its parent, leaving a zero-byte report and no error — the same

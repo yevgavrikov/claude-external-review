@@ -319,6 +319,7 @@ function advice(status) {
 
 async function serveProbe(provider, key, modelId) {
   const seen = [];
+  let lastStatus = 0;
   for (const id of [modelId]) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 45_000);
@@ -336,7 +337,8 @@ async function serveProbe(provider, key, modelId) {
           max_tokens: 1,
         }),
       });
-      if (res.ok) return { ok: true, detail: `${id} answered` };
+      if (res.ok) return { ok: true, status: 200, detail: `${id} answered` };
+      lastStatus = res.status;
       seen.push(`${id} → ${res.status}${advice(res.status)}`);
     } catch (e) {
       seen.push(`${id} → ${e.name === 'AbortError' ? 'timeout' : 'unreachable'}`);
@@ -344,7 +346,7 @@ async function serveProbe(provider, key, modelId) {
       clearTimeout(t);
     }
   }
-  return { ok: false, detail: seen.join(', ') };
+  return { ok: false, status: lastStatus, detail: seen.join(', ') };
 }
 
 const num = (v) => (v == null ? null : Number(v));
@@ -1237,7 +1239,7 @@ function cmdRun(args) {
 
   child.stdout.on('data', (d) => { buf += d; process.stdout.write(d); bump(); });
   child.stderr.on('data', (d) => { errBuf += d; process.stderr.write(d); bump(); });
-  child.on('close', (code, signal) => {
+  child.on('close', async (code, signal) => {
     writeFileSync(out, buf);
     // Classify against BOTH streams: which one carries the error is the
     // runner's choice, not ours.
@@ -1280,7 +1282,55 @@ function cmdRun(args) {
       // separate from the rate-limit branch because the ADVICE differs: there
       // is no window to wait out, so a short pause and a different model are
       // the useful suggestions.
+      // A MODEL THAT IS NOT SERVED HERE IS NOT A CAPACITY PROBLEM, and it must
+      // be answered before the retryable branches below or it inherits their
+      // advice. A sibling repo lost three attempts to this: it read exit 3,
+      // waited, re-ran, and re-ran again against an id the router answers 404
+      // for and always will. Meanwhile a healthy model in the same catalog was
+      // never tried, because nothing said "this one is gone, the provider is
+      // fine".
+      //
+      // 410 Gone and 404 mean the id is wrong or withdrawn - permanent, and no
+      // amount of waiting changes it. Deliberately NOT auto-retried even under
+      // --retry, for the same reason the daily-allowance branch is not: a retry
+      // loop against a permanent failure is worse than an error, because it
+      // looks like progress.
+      if (/\b(404|410)\b|model_not_found|unknown model|\bnot found\b|\bgone\b/i
+          .test(both)) {
+        console.error(C.y(
+          `\n  ${model} IS NOT SERVED by ${provider.label}.`));
+        console.error(C.dim(
+          '  404/410 is permanent: the id is withdrawn or wrong. Retrying will\n' +
+          '  never succeed, and the provider itself is probably healthy - a\n' +
+          '  catalog listing is not a list of servable models.\n' +
+          '  Probe before spending another pass:\n' +
+          `    external-review doctor --provider ${provider.id ?? ''} --model <id>\n`));
+        process.exit(7);
+      }
       if (/\b5\d\d\b.*(server error|unexpected)|unexpected server error/i.test(both)) {
+        // THE RUNNER LAUNDERS THE STATUS, so this text cannot be trusted to
+        // mean what it says. opencode reports a withdrawn NVIDIA model - a hard
+        // 410 - as `{"name":"UnknownError","message":"Unexpected server error"}`.
+        // Parsing stderr therefore cannot separate "the host fell over" from
+        // "this id does not exist", and advising a retry on the second wastes
+        // every attempt: a sibling repo lost three passes to exactly that while
+        // a healthy model in the same catalog went untried.
+        //
+        // So ASK instead of parsing. One 1-token probe against the same model
+        // costs a fraction of a pass and turns an ambiguous failure into a
+        // definite one. This is the same reason `doctor --model` exists.
+        const key2 = apiKey(provider, { required: false });
+        const probe = key2 ? await serveProbe(provider, key2, model) : null;
+        if (probe && !probe.ok && (probe.status === 404 || probe.status === 410)) {
+          console.error(C.y(`\n  ${model} IS NOT SERVED by ${provider.label}.`));
+          console.error(C.dim(
+            `  The runner reported a generic server error, but a direct probe\n` +
+            `  answers ${probe.status}: the id is withdrawn or wrong. This is\n` +
+            '  PERMANENT - retrying cannot succeed, and the provider itself is\n' +
+            '  fine. A catalog listing is not a list of servable models.\n' +
+            '  Pick another id and probe it first with `doctor --model <id>`.\n'));
+          process.exit(7);
+        }
         console.error(C.y(
           `\n  ${provider.label} returned a SERVER ERROR, not a refusal.`));
         console.error(C.dim(
