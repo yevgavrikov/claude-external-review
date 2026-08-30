@@ -276,6 +276,63 @@ async function api(provider, path, { key, ...init } = {}) {
   return res.json();
 }
 
+/**
+ * Ask ONE named model for one token, so the answer is about the model you are
+ * about to spend a pass on rather than about the catalog in general.
+ *
+ * It sampled the first three listed ids before, and that was wrong in BOTH
+ * directions on the two shipped providers: NVIDIA's alphabetical head is dead
+ * (404) while `kimi-k3` serves fine, so it warned about a working setup; a
+ * local router answers `auto` while 503-ing every real model behind it, so it
+ * passed a setup that could not run a pass at all. A sample of three says
+ * nothing about the other eighty. Deliberately tolerant of failure: `api()`
+ * would `die()`, and a dead id is a datum here, not a crash.
+ */
+/**
+ * What a probe status actually MEANS for the next step, because the statuses
+ * differ in kind and the wrong advice sends you away from a working model.
+ * A 429 says the model is fine and you are early; a 410 says it is gone
+ * forever. Telling someone to "pick another model" on a 429 is how a working
+ * setup gets abandoned.
+ */
+function advice(status) {
+  if (status === 429) return ' rate limited — transient, wait and retry; the model itself is fine';
+  if (status === 410 || status === 404) return ' gone — pick another model';
+  if (status === 503) return ' provider has no upstream configured for it';
+  if (status === 401 || status === 403) return ' key rejected for this model';
+  return '';
+}
+
+async function serveProbe(provider, key, modelId) {
+  const seen = [];
+  for (const id of [modelId]) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 45_000);
+    try {
+      const res = await fetch(`${provider.base}/chat/completions`, {
+        method: 'POST',
+        signal: ctl.signal,
+        headers: {
+          Authorization: `Bearer ${key ?? apiKey(provider)}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: id,
+          messages: [{ role: 'user', content: 'ok' }],
+          max_tokens: 1,
+        }),
+      });
+      if (res.ok) return { ok: true, detail: `${id} answered` };
+      seen.push(`${id} → ${res.status}${advice(res.status)}`);
+    } catch (e) {
+      seen.push(`${id} → ${e.name === 'AbortError' ? 'timeout' : 'unreachable'}`);
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  return { ok: false, detail: seen.join(', ') };
+}
+
 const num = (v) => (v == null ? null : Number(v));
 const money = (v) => (v == null ? '—' : `$${Number(v).toFixed(4)}`);
 
@@ -351,6 +408,37 @@ async function cmdDoctor(args = []) {
     // a doctor that conflates them is how you find out mid-review.
     const { data } = await api(provider, '/models', { key });
     check(Array.isArray(data), 'key reachable', `${data?.length ?? 0} models visible`);
+
+    // A LISTING IS NOT A PROMISE TO SERVE, and the check above cannot tell the
+    // difference. The comment above already argues that "the key is set" and
+    // "the key works" are different claims - this is the same distinction one
+    // level down: an id appearing in /models says nothing about whether a
+    // completion against it will be answered.
+    //
+    // Both shipped providers fail exactly here. NVIDIA lists models that return
+    // 410 Gone or 404 (its own `plan` output says so, while `doctor` kept
+    // printing a green tick). A local router lists every model it knows and
+    // returns 503 "no candidate model has a configured, usable provider key"
+    // for all of them - 248 visible, none servable. In both cases doctor said
+    // Ready and the pass died mid-review, which is the failure this command
+    // exists to prevent.
+    //
+    // So: send one real 1-token completion. Up to three candidates, because a
+    // single dead id is not evidence the provider is down - that is the same
+    // over-reading this check is meant to stop.
+    const wanted = argValue(args, '--model') || argValue(args, '-m');
+    if (Array.isArray(data) && data.length && wanted) {
+      const probe = await serveProbe(provider, key, wanted);
+      check(probe.ok, `${wanted} answers a request`, probe.detail);
+    } else if (Array.isArray(data) && data.length) {
+      console.log(C.dim(
+        '\n  A listed id is not a servable one. NVIDIA lists models that answer\n' +
+        '  410 Gone or 404; a local router lists every model it knows and can be\n' +
+        '  configured to serve none of them. This command will not guess which\n' +
+        '  yours are - sampling a few ids proves nothing about the rest, in\n' +
+        '  either direction.\n' +
+        '  Probe the one you are about to use:  external-review doctor --model <id>'));
+    }
     console.log(C.dim(
       `\n  ${provider.label} publishes no spend or quota endpoint, so this tool\n` +
       '  cannot show you what is left. `external-review quota` explains what the\n' +
