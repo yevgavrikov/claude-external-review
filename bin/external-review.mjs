@@ -248,6 +248,20 @@ function configEnv() {
   return _configEnv;
 }
 
+/**
+ * The provider env names this tool resolved, as a plain object to seed the
+ * RUNNER's environment. Without it, a key that only exists in the config dir
+ * authenticates our own probes and leaves the subprocess unauthenticated.
+ */
+function runnerEnv(provider) {
+  const out = {};
+  if (!provider?.env) return out;
+  const key = apiKey(provider, { required: false });
+  if (!key) return out;
+  for (const name of provider.env) out[name] = key;
+  return out;
+}
+
 /** Read a provider's key from the env, or from opencode's auth store. */
 function apiKey(provider, { required = true } = {}) {
   for (const name of provider.env) if (process.env[name]) return process.env[name];
@@ -1174,6 +1188,18 @@ function cmdRun(args) {
     // common real failure was reported as a generic "exited 1". Streaming it
     // on keeps it usable as the liveness signal.
     cwd, stdio: ['ignore', 'pipe', 'pipe'],
+    // The runner resolves its credential from ITS OWN environment - opencode.json
+    // references the key as `{env:PROVIDER_API_KEY}` - so a key this tool found
+    // in `~/.config/external-review/*.env` reaches our checks and NOT the child.
+    // That produced the worst possible split: `doctor` green on every line,
+    // including "runner is configured for this provider", and the pass dying on
+    // `Invalid API key` from the runner. Same class as reporting models visible
+    // and calling it servable - proving OUR half works says nothing about the
+    // half that does the review.
+    //
+    // `process.env` still wins; this only fills a name the environment does not
+    // already define.
+    env: { ...runnerEnv(provider), ...process.env },
     // Own process group, so an idle timeout can take the runner's children
     // with it rather than orphaning them holding the pipes.
     detached: true,
