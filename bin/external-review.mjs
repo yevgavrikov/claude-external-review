@@ -209,9 +209,50 @@ const C = process.stdout.isTTY
 const die = (msg) => { console.error(`${C.r('error')} ${msg}`); process.exit(1); };
 const info = (msg) => console.error(C.dim(msg));
 
+/**
+ * Keys dropped in this tool's OWN config directory, as `~/.config/external-review/*.env`.
+ *
+ * Without this the tool read `providers.json` out of that directory for provider
+ * DEFINITIONS while ignoring the `.env` files sitting beside it, so `doctor`
+ * reported "no API key" with the key on disk a few bytes away and the only fix
+ * was to know to `source` it yourself. A key in the tool's own config dir is a
+ * key the tool should find.
+ *
+ * `export KEY=value`, `KEY=value`, `#` comments and surrounding quotes are all
+ * accepted, because these files are written to be `source`-able by a shell.
+ * Read once, and NEVER overriding a real environment variable - an explicitly
+ * exported key is the more deliberate of the two and must win.
+ */
+let _configEnv;
+function configEnv() {
+  if (_configEnv) return _configEnv;
+  _configEnv = {};
+  const dir = join(homedir(), '.config/external-review');
+  let files = [];
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.env')); } catch { return _configEnv; }
+  for (const f of files) {
+    let text;
+    try { text = readFileSync(join(dir, f), 'utf8'); } catch { continue; }
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (!m) continue;
+      let v = m[2].trim();
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      if (v) _configEnv[m[1]] ??= v;
+    }
+  }
+  return _configEnv;
+}
+
 /** Read a provider's key from the env, or from opencode's auth store. */
 function apiKey(provider, { required = true } = {}) {
   for (const name of provider.env) if (process.env[name]) return process.env[name];
+  const fromConfig = configEnv();
+  for (const name of provider.env) if (fromConfig[name]) return fromConfig[name];
   const authFile = join(homedir(), '.local/share/opencode/auth.json');
   if (existsSync(authFile)) {
     try {
