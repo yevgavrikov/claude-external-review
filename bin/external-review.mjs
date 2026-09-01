@@ -56,6 +56,21 @@ const PROVIDERS = {
     authStoreKey: 'freellmapi',
     hint: 'start it (freellmapi.co) and copy the unified token from its Keys page',
     runnerPrefix: 'freellmapi/',
+    // A FAILOVER ROUTER PICKS THE MODEL; you ask for `auto`.
+    //
+    // Its /models listing is a CATALOG, not a list of servable ids: measured
+    // 2026-09-01, 248 entries were listed and six well-known code models
+    // (codestral-2508, qwen3-coder-480b, deepseek-v3, llama-3.3-70b-versatile,
+    // kimi-k2, glm-4.6) all answered 404 or 503. The router's own error says
+    // so - "Model 'x' is not in the catalog. Use 'auto'".
+    //
+    // Without this flag the 404 branch below tells the caller the id is
+    // "withdrawn or wrong, probe another one", which is correct for a DIRECT
+    // provider and sends a router user hunting through hundreds of dead ids.
+    // An agent lost most of an hour to exactly that before the owner pointed
+    // out that auto-selection is the whole point of the router.
+    router: true,
+    canonicalModel: 'auto',
     caps: { spend: false, pricing: false, contextLength: false, endpoints: false },
     limits: {
       perDay: null, perMinute: null, resets: 'per-upstream',
@@ -1299,6 +1314,20 @@ function cmdRun(args) {
           .test(both)) {
         console.error(C.y(
           `\n  ${model} IS NOT SERVED by ${provider.label}.`));
+        if (provider.router && model !== provider.canonicalModel) {
+          // The likeliest cause on a router is not a dead id - it is asking
+          // for an id at all. Say that first, because the generic advice
+          // below sends the caller to probe another id, and on a router the
+          // whole space of ids is the wrong space.
+          console.error(C.dim(
+            `  ${provider.label} is a FAILOVER ROUTER: it chooses the upstream\n` +
+            `  and fails over for you, so it serves ONE id - ` +
+            `${provider.canonicalModel}.\n` +
+            '  Its /models output is a catalog, not a list of servable models.\n' +
+            '  Re-run with:\n' +
+            `    --model ${provider.canonicalModel}\n`));
+          process.exit(7);
+        }
         console.error(C.dim(
           '  404/410 is permanent: the id is withdrawn or wrong. Retrying will\n' +
           '  never succeed, and the provider itself is probably healthy - a\n' +
@@ -1323,6 +1352,22 @@ function cmdRun(args) {
         const probe = key2 ? await serveProbe(provider, key2, model) : null;
         if (probe && !probe.ok && (probe.status === 404 || probe.status === 410)) {
           console.error(C.y(`\n  ${model} IS NOT SERVED by ${provider.label}.`));
+          // Router first: on a failover router the usual advice ("pick another
+          // id") points at the wrong space entirely, because the router serves
+          // exactly one id and chooses the upstream itself. This branch is the
+          // one that actually fires in practice - the runner launders the 404
+          // into a generic 5xx, so the direct probe below is what discovers it,
+          // and the 404 branch further up is never reached.
+          if (provider.router && model !== provider.canonicalModel) {
+            console.error(C.dim(
+              `  ${provider.label} is a FAILOVER ROUTER: it chooses the\n` +
+              '  upstream and fails over for you, so it serves ONE id -\n' +
+              `  ${provider.canonicalModel}. Its /models output is a CATALOG,\n` +
+              '  not a list of servable models.\n' +
+              '  Re-run with:\n' +
+              `    --model ${provider.canonicalModel}\n`));
+            process.exit(7);
+          }
           console.error(C.dim(
             `  The runner reported a generic server error, but a direct probe\n` +
             `  answers ${probe.status}: the id is withdrawn or wrong. This is\n` +

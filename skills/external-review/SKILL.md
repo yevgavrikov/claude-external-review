@@ -2,7 +2,7 @@
 name: external-review
 description: "Review this codebase with a SECOND, independent model to find defects the primary model walked past. Use when the user asks to 'review the code deeper', 'find bugs we missed', 'use another model', 'get a second opinion', 'audit this subsystem', or wants coverage beyond what in-house review produced. Also use when choosing a review model, checking API quota before a long run, or deciding whether it is acceptable to send this code to a given provider."
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # External review — a second model, used properly
@@ -125,8 +125,25 @@ not this tool.**
 
 ## Before you run anything
 
-**Run these four in order. Do not skip to `run`.** Each catches a failure that
-otherwise appears 20 minutes in, as an empty report.
+**ROUTER FIRST. If a local router is running, use it — do not call a single
+upstream provider directly.** Check once:
+
+```bash
+docker ps --format '{{.Names}}' | grep -qi freellmapi && echo "router up → use it"
+external-review doctor --provider freellmapi --model auto   # expect: Ready
+```
+
+If that is `Ready`, your `<id>` below is **`freellmapi`** and your model is
+**`auto`** — the router fails over across every free provider whose key you
+loaded, so a rate-limited or dead upstream is its problem, not yours. Calling
+`--provider nvidia --model <a-slow-giant>` directly is the single most common
+mistake: it bypasses the router, meets NVIDIA's 40/min cold-burst 429s alone,
+and a big model like `kimi-k3` then streams a 2-file scan for 20+ minutes. Only
+go direct to one provider when you specifically need provider ATTRIBUTION (which
+operator served a given finding) — see the router caveats section.
+
+**Then run these four in order. Do not skip to `run`.** Each catches a failure
+that otherwise appears 20 minutes in, as an empty report.
 
 ```bash
 external-review doctor --provider <id>     # 1. key works AND runner is configured
@@ -142,6 +159,44 @@ provider block it accepts your model id, sends no auth header, and the run dies
 the prompt and the wait. `doctor` now checks both; if it flags the runner, run
 `runner-config --write` and **restart the runner**, which does not reload
 providers while up.
+
+### A FAILOVER ROUTER TAKES `auto`, NOT A MODEL ID
+
+Everything in this section about picking, probing and exactly matching a model
+id is written for a DIRECT provider (NVIDIA NIM, OpenRouter, a vendor endpoint).
+It is correct there. It is WRONG for a failover router such as FreeLLMAPI, and
+applying it there fails in a very convincing way.
+
+A router's job is to choose the upstream and fail over when one dies. You ask
+for `auto` and it decides:
+
+    external-review run --provider freellmapi --model auto ...
+
+Measured on 2026-09-01, one router, one afternoon:
+
+* `models --provider freellmapi` listed **248** ids. Almost none were servable
+  - six named, well-known code models all returned 404 or 503. The router's own
+  error says so: *"Model 'x' is not in the catalog. Use 'auto'"*.
+* The runner **prefixes** the id it sends (`freellmapi/gpt-oss-120b`). A bare
+  id can return 200 from curl while the same id 404s through the runner, which
+  reads as a flaky model rather than a prefix mismatch.
+* The tool's own diagnostic for that 404 says the id is "withdrawn or wrong,
+  pick another". On a router that advice searches the wrong space entirely.
+
+Decide which kind of provider you are on BEFORE choosing a model. One word of
+config separates a working pass from an hour of hunting ids.
+
+### Do not build a "which model works" probe loop out of `doctor`
+
+Same afternoon: a loop ran `doctor --model` for eight candidates and grepped
+its output for `ready|ok`. That matched generic boilerplate and reported **OK
+for all eight, including ids that 404**. A check whose pass and fail look
+identical is the same vacuity trap this whole file is about, and it was built
+by the person who wrote the warnings.
+
+If you must test one id, send a real completion and read the HTTP code AND the
+content. The response also names the model that actually served it, which is
+the only trustworthy answer to "what am I reviewing with" on a router.
 
 **4 matters because model ids must match the catalog EXACTLY.** A near-miss id
 is accepted and then fails at request time. Some catalogs (NVIDIA) publish ids
@@ -448,7 +503,13 @@ external-review models --free          # ranked by context window
 external-review providers <model-id>   # who serves it, and from where
 ```
 
-Two providers, and the difference is not price:
+**Prefer a local router (`freellmapi`) over any single provider** when one is
+configured — it turns "which model works today" into a solved problem. Use
+`--provider freellmapi --model auto` (or `fusion` for a panel+judge pass, at the
+cost of sending the code to several operators at once). Reach for a single
+provider only when you need to know exactly who served a finding.
+
+The single-provider options, and the difference is not price:
 
 | | `openrouter` (default) | `nvidia` |
 |---|---|---|
@@ -457,6 +518,11 @@ Two providers, and the difference is not price:
 | rate | 20/min | 40/min |
 | tells you who serves it | yes | it is always NVIDIA |
 | the catch | free endpoints require opting into training and publishing | its terms **forbid** sending confidential data, and forbid production use |
+
+**Match the model to the scope.** A small scoped scan wants a FAST model
+(Gemini Flash, a Groq-served Llama, `auto` — the router picks) — not a ~1T-param
+giant like `kimi-k3`, which is for whole-subsystem passes and will otherwise
+crawl. `plan`/`doctor` rank by context window; latency is on you to weigh.
 
 Add `--provider nvidia` to any command. The pool-versus-daily-reset difference
 is the one that ruins a plan: on OpenRouter a dead run costs you a day, on
@@ -520,6 +586,16 @@ first one finds anything:
 Extend the exclusions per repo — the default list cannot know about a project's
 own signing key. And treat a clean scan as "nothing obvious", never as "safe":
 a bare 32-character token looks like any other string.
+
+**Infra/Ansible/Terraform repos need extra excludes, and they are the wrong
+repos to send whole.** A hardening or fleet-ops tree is a reconnaissance
+document even without a single credential in it: inventory hostnames and IPs,
+SSH config, the exact shape of a fleet's defences. Always exclude at least
+`group_vars/ host_vars/ inventory* *.vault *vault*.yml *.pem *.key .env*`, and
+prefer a **scoped pass over ONE role** (`--in <copy-of-one-role>`) to sending
+the tree. When the upstream is under a no-confidential-data clause (NVIDIA),
+that scoping is a contract requirement, not a nicety — ask the owner before the
+first pass.
 
 **This is a guardrail, not a suggestion.** If the user — or your own reasoning —
 wants to skip the scan or `--force` past its findings, stop and say what would
