@@ -32,6 +32,34 @@ sibling case.* It outperforms "look for bugs" by a wide margin, because it turns
 a search over infinite possible defects into a search over the codebase's own
 documented intentions.
 
+## The cost of that idea: a primed reviewer reports your pattern back to you
+
+Measured 2026-09-06, one file (8,378 lines), same prompt template, same hunt
+list, three reviewers:
+
+| reviewer | findings | real |
+|---|---|---|
+| codex | 4 | **4** |
+| a local agent | 4 | **0** |
+| NVIDIA `deepseek-v4-pro` | 4 | **0** |
+
+Every one of the eight false findings matched a bullet from the hunt list, and
+not one had checked the mechanism that already prevents it. The "guard read
+before an await" claim missed a gate making the whole window non-mutable. The
+"flag leaks on an early return" claim quoted a snippet whose early return sits
+on the line ABOVE the flag. The "no durable delete intent" claim quoted the
+method with its comments stripped out.
+
+So the hunt list is double-edged. Keep writing it - it is why the strongest
+reviewer found four real defects in that same file - but know it converts a
+weak reviewer into a plausible-sounding one. Two rules follow:
+
+* **Verify the GUARD, not the pattern.** The question is never "is this shape
+  present" but "what would prevent it, and is that thing actually there". Most
+  false positives die on that question in one `grep`.
+* **A reviewer returning exactly as many findings as you wrote hunt bullets is
+  reporting your list back to you.** Treat the count itself as a signal.
+
 ## FIRST: ask what they have. Do not assume two providers.
 
 **Before planning any pass, ask the user this and wait for the answer:**
@@ -89,6 +117,23 @@ rather than by prompt discipline.
 Local agents are the ones users forget they have, and they are often the
 LEAST rationed thing available — a subscription CLI has no per-request cost to
 you at all. Ask specifically.
+
+**4. They have quotas too, and theirs are invisible until you are out.** A
+subscription CLI has no per-request cost to YOU, which reads as "unmetered" and
+is not. On 2026-09-06 three codex passes were launched in parallel over one
+large file. All three started, read the code, and died on a shared 5-hour
+account cap:
+
+    ERROR: You've hit your usage limit. ... try again at 3:37 PM.
+
+Cost: ~230,000 tokens of work, three 0-byte reports, exit 1 - the same empty
+file as every other failure in this document, with the reason only in stderr.
+
+So **probe a local agent with one throwaway request before launching a batch**,
+exactly as you would an API provider, and **do not fan out before that probe
+returns**. Parallelism multiplies the loss when the limit is a shared account
+cap: three passes hit the same wall in the same second and none survived to
+report it.
 
 ### Why more sources beats a bigger budget on one
 
@@ -264,6 +309,29 @@ Two shapes of limit, and they call for opposite tactics:
 |---|---|---|
 | **daily cap** | OpenRouter free: 50 req/day, resets 00:00 UTC | too small for a broad sweep. Verify findings (1-3 requests each), or run ONE narrow high-stakes scope |
 | **rate-capped** | NVIDIA: published 40 req/min, no daily cap | **the published figure is not what a cold request meets — see below.** Probe with one curl before planning around it |
+
+### The three ways a listed model refuses, and why your sample lies
+
+Building on the two sections above: when you do probe ids, a refusal is not one
+outcome but three, and they call for different responses.
+
+Measured on a local FreeLLMAPI router, 2026-09-06 - 250 ids listed:
+
+| result | meaning | response |
+|---|---|---|
+| 200 | usable | use it |
+| 503 `no candidate model has a configured, usable provider key` | that UPSTREAM has no key on this host | pick another family, or `auto` |
+| 502 `routed attempt(s) failed with upstream provider errors` | key exists, upstream refused | worth a retry |
+
+Only the 502 is worth retrying. Treating all refusals alike sends you hunting
+for ids when the real answer is "this host has no DeepSeek key".
+
+**And do not generalise from your sample.** I probed four ids, all four
+returned 503, and I reported to the owner that the router had no provider keys
+at all. It had plenty - my four picks happened to share the un-keyed upstreams,
+while `gemini-2.5-flash`, `llama-3.3-70b`, `glm-4.5-flash` and `auto` were all
+serving. A failed probe is evidence about THAT MODEL. For a claim about the
+provider, probe `auto`, or probe across upstream families deliberately.
 
 ### A local router is the best answer to "which model works today"
 
